@@ -526,3 +526,17 @@ this genre on this platform.
 - `wally install` with zero dependencies **deletes** the `Packages` directory, so a
   plain `"$path": "Packages"` breaks `rojo build` on a fresh clone. Use
   `"$path": { "optional": "Packages" }`.
+- **`PARALYSIS_SPEED_MULTIPLIER` is 0.5x on purpose. Gen 5 is 0.25x. This is a
+  design decision, not a bug — do not "correct" it.** Everything else in the
+  engine follows Gen 5; this one constant does not. Quarter speed is punishing
+  enough to decide games on its own, and Game Freak themselves moved to 0.5x in
+  Gen 7. The constant lives in `Battle/StatusEffects.luau` and is asserted by
+  name in its spec, so a silent revert fails the suite. If it is ever revisited,
+  that is a balance call and belongs to data-architect.
+- **A previous brief specified the stat-stage ladder as "+2 = 1.5x, -2 = 0.67x".
+  That was wrong** — those are the ±1 values. Gen 5 is +1 = 1.5x, +2 = 2.0x,
+  -1 = 0.67x, -2 = 0.5x. It was caught because `DamageCalc.spec` already asserted
+  `applyStage(100, 2) == 200` against verified numbers, so implementing the brief
+  would have turned existing tests red. Gen 5 won. The lesson generalises: when an
+  instruction contradicts a test that has already been verified by hand, the test
+  is the better evidence — say so and keep the test.
