@@ -60,6 +60,7 @@ type MoveEffect = MoveEffectModule.MoveEffect
 type Rng = RngModule.Rng
 type SideState = BattleStateModule.SideState
 type StageBlock = StatBlockModule.StageBlock
+type StagedStat = StatBlockModule.StagedStat
 type StatBlock = StatBlockModule.StatBlock
 type StatusId = MoveEffectModule.StatusId
 type TypeId = TypeIdModule.TypeId
@@ -131,6 +132,16 @@ end
 
 local function activeOf(side: SideState): CreatureInstance
 	return BattleStateModule.activeCreature(side)
+end
+
+--[[
+	A Luau table indexer keyed by a union type is invariant (CLAUDE.md section 10), so
+	`side.active.volatiles.Recharge` is rejected even though Recharge is a VolatileId.
+	Every key read or written through this accessor comes from the closed VolatileId
+	list in Types/MoveEffect, so the cast cannot introduce a key that does not exist.
+]]
+local function volatilesOf(side: SideState): { [string]: any }
+	return side.active.volatiles :: any
 end
 
 local function emit(run: TurnRun, event: BattleEvent)
@@ -536,6 +547,157 @@ local function applyStatStageEffect(
 	})
 end
 
+--[[ Conditions ------------------------------------------------------------ ]]
+
+--[[
+	Which volatiles the engine actually acts on.
+
+	A volatile that is stored and never read is worse than one that is missing: the
+	state looks right, the log looks right, and the move does nothing. This table names
+	the ones with behaviour so the gap is greppable rather than a surprise. Everything
+	not listed here is stored faithfully and read by nobody yet.
+
+	  Recharge  blocks the next action, then clears. The price of the 130 tier.
+	  Flinch    blocks an action not yet taken this turn, then clears.
+	  Taunt     blocks Status moves while it lasts.
+]]
+local VOLATILE_BEHAVIOUR: { [string]: string } = {
+	Recharge = "blocks the next action",
+	Flinch = "blocks this turn's action",
+	Taunt = "blocks Status moves",
+}
+
+local function applyCureStatus(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local targetSide = sideForTarget(effect, attackerSide, defenderSide)
+
+	-- UserParty is the whole reason this primitive takes a target at all: a cleric
+	-- move that only reached the creature already in front of you would not be worth
+	-- the turn it costs.
+	local creatures: { CreatureInstance } = {}
+	if MoveEffectModule.targetOf(effect) == "UserParty" then
+		for _, creature in targetSide.party do
+			table.insert(creatures, creature)
+		end
+	else
+		table.insert(creatures, activeOf(targetSide))
+	end
+
+	local allowed: { [string]: boolean }? = nil
+	if effect.statuses ~= nil then
+		allowed = {}
+		for _, status in effect.statuses do
+			(allowed :: any)[status] = true
+		end
+	end
+
+	for _, creature in creatures do
+		local status = creature.status
+		if status ~= nil and (allowed == nil or allowed[status] == true) then
+			creature.status = nil
+			creature.statusTurns = nil
+			emit(run, {
+				kind = "StatusCured",
+				sideId = targetSide.id,
+				creatureUid = creature.uid,
+				status = status :: StatusId,
+			})
+		end
+	end
+end
+
+-- Emits one StatStageChanged per stat that actually moved, so the log says what
+-- changed rather than announcing a reset that may have done nothing.
+local function resetStagesOn(run: TurnRun, side: SideState, effect: any)
+	local before = side.active.stages
+	local after = StatStages.reset(before, {
+		onlyPositive = effect.onlyPositive,
+		onlyNegative = effect.onlyNegative,
+	})
+	side.active.stages = after
+
+	for _, stat: StagedStat in StatStages.STAGED_STATS do
+		local previous = StatStages.get(before, stat)
+		local current = StatStages.get(after, stat)
+		if previous ~= current then
+			emit(run, {
+				kind = "StatStageChanged",
+				sideId = side.id,
+				creatureUid = activeOf(side).uid,
+				stat = stat,
+				delta = current - previous,
+				newStage = current,
+			})
+		end
+	end
+end
+
+local function applyResetStatStages(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	if MoveEffectModule.targetOf(effect) == "AllActive" then
+		resetStagesOn(run, attackerSide, effect)
+		resetStagesOn(run, defenderSide, effect)
+		return
+	end
+	resetStagesOn(run, sideForTarget(effect, attackerSide, defenderSide), effect)
+end
+
+local function applyApplyVolatile(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local side = sideForTarget(effect, attackerSide, defenderSide)
+	if not run.rng:nextBoolean(MoveEffectModule.chanceOf(effect)) then
+		return
+	end
+
+	-- Re-applying does not refresh or stack. Letting it would make a Taunt loop
+	-- permanent, which is a lock rather than a play.
+	local volatiles = volatilesOf(side)
+	if volatiles[effect.volatile] ~= nil then
+		return
+	end
+
+	volatiles[effect.volatile] = { turnsRemaining = effect.duration }
+	emit(run, {
+		kind = "VolatileApplied",
+		sideId = side.id,
+		creatureUid = activeOf(side).uid,
+		volatileId = effect.volatile,
+	})
+end
+
+local function applyRemoveVolatile(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local side = sideForTarget(effect, attackerSide, defenderSide)
+	local volatiles = volatilesOf(side)
+	if volatiles[effect.volatile] == nil then
+		return
+	end
+
+	volatiles[effect.volatile] = nil
+	emit(run, {
+		kind = "VolatileRemoved",
+		sideId = side.id,
+		creatureUid = activeOf(side).uid,
+		volatileId = effect.volatile,
+	})
+end
+
 --[[ Dispatch --------------------------------------------------------------- ]]
 
 local function applyEffect(
@@ -560,10 +722,19 @@ local function applyEffect(
 		applyInflictStatus(run, effect, attackerSide, defenderSide)
 	elseif effect.kind == "StatStage" then
 		applyStatStageEffect(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "CureStatus" then
+		applyCureStatus(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "ResetStatStages" then
+		applyResetStatStages(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "ApplyVolatile" then
+		applyApplyVolatile(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "RemoveVolatile" then
+		applyRemoveVolatile(run, effect, attackerSide, defenderSide)
 	else
 		error(
 			`TurnResolver: effect "{effect.kind}" is not implemented in this phase. `
-				.. `Implemented: Damage, FixedDamage, Recoil, Drain, Heal, InflictStatus, StatStage.`
+				.. `Implemented: Damage, FixedDamage, Recoil, Drain, Heal, InflictStatus, `
+				.. `StatStage, CureStatus, ResetStatStages, ApplyVolatile, RemoveVolatile.`
 		)
 	end
 end
@@ -634,6 +805,44 @@ local function performMove(run: TurnRun, side: SideState, intent: any)
 	if slot == nil then
 		error(`TurnResolver: "{attacker.uid}" has no move in slot {tostring(intent.slot)}`)
 	end
+	local move = run.dex.getMove(slot.moveId)
+	local volatiles = volatilesOf(side)
+
+	--[[
+		Recharge is checked before anything else and clears itself as it fires, so it
+		costs exactly one turn and never two. It also returns before the PP deduction:
+		the move was not used, so it is not paid for.
+	]]
+	if volatiles.Recharge ~= nil then
+		volatiles.Recharge = nil
+		emit(run, {
+			kind = "VolatileRemoved",
+			sideId = side.id,
+			creatureUid = attacker.uid,
+			volatileId = "Recharge",
+		})
+		emit(run, {
+			kind = "MoveFailed",
+			sideId = side.id,
+			creatureUid = attacker.uid,
+			moveId = move.id,
+			reason = "Blocked",
+		})
+		return
+	end
+
+	-- A flinch only takes a turn that has not been spent yet. The queue is already
+	-- ordered, so a slower flincher simply misses its window.
+	if volatiles.Flinch ~= nil then
+		emit(run, {
+			kind = "MoveFailed",
+			sideId = side.id,
+			creatureUid = attacker.uid,
+			moveId = move.id,
+			reason = "Flinched",
+		})
+		return
+	end
 
 	--[[
 		The status gate runs before the PP check on purpose: a turn lost to sleep or
@@ -665,6 +874,17 @@ local function performMove(run: TurnRun, side: SideState, intent: any)
 		return
 	end
 
+	if move.category == "Status" and volatiles.Taunt ~= nil then
+		emit(run, {
+			kind = "MoveFailed",
+			sideId = side.id,
+			creatureUid = attacker.uid,
+			moveId = move.id,
+			reason = "Taunted",
+		})
+		return
+	end
+
 	if slot.pp <= 0 then
 		emit(run, {
 			kind = "MoveFailed",
@@ -676,7 +896,6 @@ local function performMove(run: TurnRun, side: SideState, intent: any)
 		return
 	end
 
-	local move = run.dex.getMove(slot.moveId)
 	slot.pp -= 1
 	side.active.lastMoveId = move.id
 	emit(run, { kind = "MoveUsed", sideId = side.id, creatureUid = attacker.uid, moveId = move.id })
@@ -710,6 +929,44 @@ local function performMove(run: TurnRun, side: SideState, intent: any)
 end
 
 --[[ End of turn ------------------------------------------------------------ ]]
+
+--[[
+	Flinch always clears; anything with a duration counts down and expires at zero.
+	A volatile applied this turn therefore loses one tick immediately, so "duration 3"
+	means three turns INCLUDING the one it landed on.
+]]
+local function expireVolatiles(run: TurnRun)
+	for _, side in run.state.sides do
+		local creature = activeOf(side)
+		local expired: { string } = {}
+
+		local volatiles = volatilesOf(side)
+		for volatileId, volatileState in volatiles do
+			if volatileId == "Flinch" then
+				table.insert(expired, volatileId)
+			elseif volatileState.turnsRemaining ~= nil then
+				local remaining = volatileState.turnsRemaining - 1
+				if remaining <= 0 then
+					table.insert(expired, volatileId)
+				else
+					volatileState.turnsRemaining = remaining
+				end
+			end
+		end
+
+		-- Collected first, deleted after: removing during iteration is undefined.
+		table.sort(expired)
+		for _, volatileId in expired do
+			volatiles[volatileId] = nil
+			emit(run, {
+				kind = "VolatileRemoved",
+				sideId = side.id,
+				creatureUid = creature.uid,
+				volatileId = volatileId :: any,
+			})
+		end
+	end
+end
 
 local function runEndOfTurn(run: TurnRun)
 	local order = {}
@@ -815,6 +1072,7 @@ local function resolveTurn(
 	end
 
 	runEndOfTurn(run)
+	expireVolatiles(run)
 
 	run.state.turn += 1
 	for _, event in run.events do

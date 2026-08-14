@@ -221,3 +221,61 @@ how a creature ends up at -3 HP or faints twice.
 **Reversal.** Inline it again, but the faint-event tests will hold you to the behaviour.
 
 ---
+## D13 — Three volatiles gate actions; the other ten are stored and inert, and said so out loud
+
+**Decision.** `ApplyVolatile` stores any of the 13 volatiles faithfully, but only
+Recharge, Flinch and Taunt change what the engine does. A `VOLATILE_BEHAVIOUR` table in
+TurnResolver names exactly which three.
+
+**Why not all thirteen.** Confusion, Substitute, LeechSeed, Protect, Endure, Encore,
+Locked, Bound, Charging and FocusEnergy are each a small feature with its own rules and
+its own tests. Implementing ten of them inside a commit labelled "the four
+condition primitives" would have been a much larger change hiding behind a smaller
+description.
+
+**Why those three.** They are the ones the vocabulary already depends on. Recharge is
+the price of the 130 tier and `flame.cinderlash` already applies it — without the gate
+the nuke is free and CLAUDE.md's tier table is a lie. Flinch and Taunt are the two that
+gate an action rather than modify a number, so they share the machinery Recharge needed
+and cost almost nothing extra.
+
+**The risk being managed.** A volatile that is stored and never read is worse than one
+that is missing: the state looks right, the log looks right, and the move does nothing.
+The table exists so that gap is greppable rather than a surprise.
+
+**Reversal.** Each remaining volatile is an independent addition; none of them require
+changing what is here.
+
+---
+
+## D14 — A stated volatile duration counts the turn it landed on
+
+**Decision.** `duration = 3` means three turns including the one the volatile was
+applied on, because the end-of-turn tick runs on that turn too.
+
+**Alternatives.** Skip the first tick so the number means "three full turns after
+this one". That needs a marker on the volatile recording the turn it arrived, and
+`VolatileState` lives in `Types/BattleState.luau` — data-architect's file.
+
+**Why this one.** It avoids editing another agent's type for a cosmetic difference, and
+"three turns" counting the current turn is the more common reading in the genre anyway.
+
+**Reversal.** Add a field to VolatileState and skip one tick; two tests assert the
+current counts and would need their numbers moved by one.
+
+---
+
+## D15 — A creature cannot cure its own sleep, and that is the correct behaviour
+
+**Decision.** Left as-is after a test caught it: the status gate blocks a sleeping
+creature before any effect runs, so a self-targeted CureStatus can never fire while
+asleep. The test was rewritten to cure from the bench instead.
+
+**Why this is right rather than a bug.** Sleep's entire cost is losing turns. A move
+that cured it from inside would make sleep cost one turn always, which is not a status
+condition, it is a minor inconvenience. Curing sleep is what a cleric teammate is for.
+
+**Reversal.** Move the CureStatus dispatch ahead of the status gate — but the ordering
+tests for sleep would all need revisiting, and the status would stop mattering.
+
+---
