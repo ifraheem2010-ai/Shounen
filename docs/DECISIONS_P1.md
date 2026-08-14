@@ -344,3 +344,54 @@ the only axis Inversion is about.
 two-line change and a lot of broken expectations.
 
 ---
+## D20 — SelfSwitch picks its replacement at random, and that is a placeholder
+
+**Decision.** A pivot move brings in a randomly chosen living party member, drawn from
+the injected RNG so it still replays from a seed.
+
+**Why it is wrong, said out loud.** In a real battle the player chooses the
+replacement, and that choice is most of what makes a pivot move worth a moveslot.
+Picking at random is not the behaviour this should ship with.
+
+**Why it is here anyway.** Engine owns prompting for a mid-turn choice and Engine does
+not exist yet. The alternatives were to make the move silently do nothing — the exact
+failure the VOLATILE_BEHAVIOUR table exists to prevent — or to invent a pending-choice
+protocol now and rewrite it when Engine lands.
+
+**Reversal.** When Engine can prompt, `applySelfSwitch` stops calling `bringIn` and
+records a pending switch on the turn outcome instead. The tests asserting that the user
+withdraws stay true; only the choice of replacement changes.
+
+---
+
+## D21 — Phazing beats trapping
+
+**Decision.** `Trap` blocks a voluntary switch. It does not block `ForceSwitch` — a
+phazing move drags a trapped creature out normally.
+
+**Why.** A trap that also blocked being dragged out would leave the trapped side with
+no way off the field at all: no switch, no phaze, nothing but attacking until something
+faints. That is a lock rather than a matchup, and locks are what make a trapper
+un-fun to play against rather than dangerous.
+
+**How it falls out of the code.** `performSwitch` checks the trap; `applyForceSwitch`
+calls `bringIn` directly and never sees the check. That is deliberate, not an
+oversight, and is commented as such at both sites.
+
+**Reversal.** Move the trap check into `bringIn` and both paths block.
+
+---
+
+## D22 — Leaving the field releases every trap in both directions
+
+**Decision.** `bringIn` clears `trappedBySideId` on the creature entering AND clears any
+trap that the departing creature was applying to the other side.
+
+**Why both.** A trap is a relationship between two creatures on the field. If the
+trapper leaves and the mark stays, the victim is held by nobody — permanently, with no
+counterplay and no visible cause. That is the worst class of bug in a battle system:
+one where the state is wrong but nothing looks wrong.
+
+**Reversal.** Neither direction is needed if traps become duration-based instead.
+
+---

@@ -815,6 +815,103 @@ local function applyStatStageEffect(
 	})
 end
 
+--[[ Moving creatures on and off the field -------------------------------- ]]
+
+--[[
+	The shared half of every entry: reset what is battle-only, log it, pay the hazards.
+
+	`keepStages` exists for Baton-Pass-style pivoting, which is the one case where the
+	stages are the whole point of the move. Everything else about the outgoing creature
+	is left behind regardless — volatiles surviving a switch would make Taunt permanent.
+]]
+local function bringIn(run: TurnRun, side: SideState, partyIndex: number, keepStages: boolean?)
+	local outgoing = activeOf(side)
+	emit(run, { kind = "SwitchOut", sideId = side.id, creatureUid = outgoing.uid })
+
+	-- A creature leaving the field releases anything it was holding in place, and
+	-- stops being held itself.
+	for _, other in run.state.sides do
+		if other.active.trappedBySideId == side.id then
+			other.active.trappedBySideId = nil
+		end
+	end
+
+	local carried = side.active.stages
+	side.active.partyIndex = partyIndex
+	side.active.stages = if keepStages == true then carried else StatBlockModule.zeroStages()
+	side.active.volatiles = {}
+	side.active.turnsOnField = 0
+	side.active.lastMoveId = nil
+	side.active.trappedBySideId = nil
+
+	emit(run, {
+		kind = "SwitchIn",
+		sideId = side.id,
+		creatureUid = activeOf(side).uid,
+		partyIndex = partyIndex,
+	})
+
+	applyHazardsOnEntry(run, side)
+end
+
+local function livingReplacements(side: SideState): { number }
+	local indices: { number } = {}
+	for index, creature in side.party do
+		if index ~= side.active.partyIndex and creature.currentHp > 0 then
+			table.insert(indices, index)
+		end
+	end
+	return indices
+end
+
+--[[
+	Phazing. The replacement is chosen with the injected RNG, so it is unpredictable to
+	both players but still replays exactly from a seed.
+
+	A trap does NOT stop this. A trap that also blocked being dragged out would leave
+	the trapped side with no way off the field at all, which is a lock rather than a
+	matchup.
+]]
+local function applyForceSwitch(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local side = sideForTarget(effect, attackerSide, defenderSide)
+	local choices = livingReplacements(side)
+	if #choices == 0 then
+		return
+	end
+	bringIn(run, side, run.rng:pick(choices))
+end
+
+--[[
+	Pivoting.
+
+	PLACEHOLDER, AND A DELIBERATE ONE: the replacement is picked at random. In a real
+	battle the player chooses, and that choice is what makes a pivot move worth a slot.
+	Engine owns prompting for it; until Engine exists, picking randomly keeps the move
+	honest about withdrawing rather than silently doing nothing.
+]]
+local function applySelfSwitch(run: TurnRun, effect: any, attackerSide: SideState)
+	local choices = livingReplacements(attackerSide)
+	if #choices == 0 then
+		return
+	end
+	bringIn(run, attackerSide, run.rng:pick(choices), effect.passBoosts == true)
+end
+
+local function applyTrap(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local side = sideForTarget(effect, attackerSide, defenderSide)
+	side.active.trappedBySideId = attackerSide.id
+end
+
 --[[ Conditions ------------------------------------------------------------ ]]
 
 --[[
@@ -1006,12 +1103,19 @@ local function applyEffect(
 		applyClearSide(run, effect, attackerSide, defenderSide)
 	elseif effect.kind == "SetField" then
 		applySetField(run, effect)
+	elseif effect.kind == "ForceSwitch" then
+		applyForceSwitch(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "SelfSwitch" then
+		applySelfSwitch(run, effect, attackerSide)
+	elseif effect.kind == "Trap" then
+		applyTrap(run, effect, attackerSide, defenderSide)
 	else
 		error(
 			`TurnResolver: effect "{effect.kind}" is not implemented in this phase. `
 				.. `Implemented: Damage, FixedDamage, Recoil, Drain, Heal, InflictStatus, `
 				.. `StatStage, CureStatus, ResetStatStages, ApplyVolatile, RemoveVolatile, `
-				.. `SetHazard, SetSideCondition, ClearSide, SetField.`
+				.. `SetHazard, SetSideCondition, ClearSide, SetField, ForceSwitch, SelfSwitch, `
+				.. `Trap. Capture is handled by the item path.`
 		)
 	end
 end
@@ -1031,27 +1135,12 @@ local function performSwitch(run: TurnRun, side: SideState, intent: any)
 	if incoming.currentHp <= 0 then
 		error(`TurnResolver: cannot switch to "{incoming.uid}", which has fainted`)
 	end
+	-- Only a voluntary switch is blocked. ForceSwitch goes through bringIn directly.
+	if side.active.trappedBySideId ~= nil then
+		error(`TurnResolver: "{activeOf(side).uid}" is trapped and cannot switch out`)
+	end
 
-	local outgoing = activeOf(side)
-	emit(run, { kind = "SwitchOut", sideId = side.id, creatureUid = outgoing.uid })
-
-	-- Everything battle-only is left behind. Stat stages surviving a switch is what
-	-- would make setup risk-free.
-	side.active.partyIndex = partyIndex
-	side.active.stages = StatBlockModule.zeroStages()
-	side.active.volatiles = {}
-	side.active.turnsOnField = 0
-	side.active.lastMoveId = nil
-	side.active.trappedBySideId = nil
-
-	emit(run, {
-		kind = "SwitchIn",
-		sideId = side.id,
-		creatureUid = incoming.uid,
-		partyIndex = partyIndex,
-	})
-
-	applyHazardsOnEntry(run, side)
+	bringIn(run, side, partyIndex)
 end
 
 --[[
