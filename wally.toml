@@ -1,0 +1,17 @@
+[package]
+name = "attimo/shounen"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+license = "UNLICENSED"
+
+# Phase 0 ships with zero packages on purpose. The battle engine is pure Luau and
+# the test harness has no external dependencies, so nothing here blocks P1.
+#
+#   P2 adds:  ProfileStore   (session-locked, migration-aware persistence)
+#   P4 adds:  jsdotlua/react + jsdotlua/react-roblox
+#
+# Do not add either before its phase gate passes.
+[dependencies]
+
+[dev-dependencies]

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: format + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs every tool pinned in rokit.toml at the exact pinned version, so CI
+      # and a developer machine are running the same binaries.
+      - uses: CompeyDev/setup-rokit@v0.2.1
+
+      - name: Check formatting
+        run: stylua --check .
+
+      # Includes the type chart validators and the Rule #1 / Rule #3 source scans.
+      # A red build here means the invariants moved, not that a test is flaky —
+      # nothing in this suite touches the network, the clock, or unseeded randomness.
+      - name: Run tests
+        run: lune run run-tests
+
+  build:
+    name: rojo build + analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: CompeyDev/setup-rokit@v0.2.1
+
+      # Note this runs BEFORE the build on purpose: with no dependencies, `wally
+      # install` deletes the Packages directory, so this is the state a fresh clone
+      # is actually in. default.project.json marks that path optional to match.
+      - name: Install packages
+        run: wally install
+
+      # Catches a broken Rojo tree before someone discovers it by opening Studio.
+      - name: Build place file
+        run: rojo build default.project.json --output build.rbxl
+
+      - name: Generate sourcemap
+        run: rojo sourcemap default.project.json --output sourcemap.json
+
+      # src/ only. tests/ and .lune/ require Lune builtins and the shim's instance
+      # tree, neither of which luau-lsp can resolve — analysing them reports nothing
+      # but unresolvable requires. They are covered by actually running them.
+      - name: Type-check
+        run: luau-lsp analyze --sourcemap=sourcemap.json src

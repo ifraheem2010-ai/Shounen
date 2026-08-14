@@ -1,0 +1,10 @@
+{
+	"languageMode": "strict",
+	"lintErrors": true,
+	"lint": {
+		"*": true,
+		"LocalShadow": false,
+		"ImportUnused": false
+	},
+	"globals": ["script"]
+}

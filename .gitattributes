@@ -1,0 +1,10 @@
+# StyLua is configured for Unix line endings and CI runs on Linux. Without this, a
+# Windows checkout can hand CI CRLF files and `stylua --check` fails on every file
+# for reasons that have nothing to do with the code.
+* text=auto eol=lf
+
+# Roblox place and model files are binary; never let git try to normalise them.
+*.rbxl binary
+*.rbxm binary
+*.rbxlx binary
+*.rbxmx binary

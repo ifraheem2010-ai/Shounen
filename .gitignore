@@ -1,0 +1,29 @@
+# Roblox place / model files — Studio is a viewer, never the source of truth.
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Wally output. wally.lock IS committed; the installed tree is not.
+# The directory itself is not committed either — with zero dependencies `wally
+# install` deletes it, which is why default.project.json marks that path optional.
+/Packages/
+/ServerPackages/
+/DevPackages/
+
+# Generated
+/sourcemap.json
+/build/
+*.log
+
+# Editor
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

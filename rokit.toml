@@ -1,0 +1,12 @@
+# Toolchain pins. `rokit install` in the repo root gets every tool at these exact
+# versions — the same ones CI uses, so "works on my machine" and "works in CI"
+# are the same statement.
+#
+# Studio is a viewer and playtester only. Git + VS Code are the source of truth.
+
+[tools]
+lune = "lune-org/lune@0.10.5"
+rojo = "rojo-rbx/rojo@7.7.0"
+stylua = "JohnnyMorganz/StyLua@2.5.2"
+wally = "UpliftGames/wally@0.3.2"
+luau-lsp = "JohnnyMorganz/luau-lsp@1.69.0"
