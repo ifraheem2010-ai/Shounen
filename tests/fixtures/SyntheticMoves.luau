@@ -126,8 +126,41 @@ local STATUS_ONLY: Move = {
 	description = "Synthetic fixture. Not balance data.",
 }
 
+--[[
+	A move that carries whatever effects you hand it and nothing else. The effect
+	interpreter has to be exercised against every primitive, and most of them have no
+	business being attached to a damaging move.
+]]
+local function utilityMove(
+	id: string,
+	typeId: string,
+	effects: { any },
+	moveExtra: { [string]: any }?
+): Move
+	local built: { [string]: any } = {
+		id = id,
+		name = id,
+		typeId = typeId,
+		category = "Status",
+		accuracy = nil,
+		pp = 10,
+		priority = 0,
+		targeting = "SingleOpponent",
+		effects = effects,
+		makesContact = false,
+		description = "Synthetic fixture. Not balance data.",
+	}
+	if moveExtra ~= nil then
+		for key, value in moveExtra do
+			built[key] = value
+		end
+	end
+	return built :: any
+end
+
 return {
 	build = damagingMove,
+	utility = utilityMove,
 	PHYSICAL_100_MARTIAL = PHYSICAL_100_MARTIAL,
 	SPECIAL_100_MARTIAL = SPECIAL_100_MARTIAL,
 	PHYSICAL_100_STORM = PHYSICAL_100_STORM,

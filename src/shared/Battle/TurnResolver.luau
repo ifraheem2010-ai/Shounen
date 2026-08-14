@@ -18,9 +18,15 @@
 	This module needs a move's data and a creature's computed battle stats. Both live
 	in tables that do not exist yet (src/shared/Data/Moves.luau and Species.luau are
 	@data-architect's). Taking a BattleDex instead of importing them means the engine
-	works today against synthetic fixtures, works unchanged when the real tables land,
-	and never reads src/shared/Data directly — which keeps this file out of another
-	agent's territory by construction rather than by discipline.
+	works today against synthetic fixtures and works unchanged when the real tables
+	land, which keeps this file out of another agent's territory by construction rather
+	than by discipline.
+
+	The engine does import Data/TypeChart. That is deliberate and not a contradiction:
+	the chart is RULES, not content — it is as much a part of the battle system as the
+	damage formula, and it changes about as often. The tables the dex exists to keep out
+	are the CONTENT tables, Moves and Species, which change whenever anyone rebalances
+	anything.
 
 	SCOPE
 
@@ -36,6 +42,7 @@
 local DamageCalc = require(script.Parent.DamageCalc)
 local StatStages = require(script.Parent.StatStages)
 local StatusEffects = require(script.Parent.StatusEffects)
+local TypeChart = require(script.Parent.Parent.Data.TypeChart)
 local BattleStateModule = require(script.Parent.Parent.Types.BattleState)
 local CreatureInstanceModule = require(script.Parent.Parent.Types.CreatureInstance)
 local MoveEffectModule = require(script.Parent.Parent.Types.MoveEffect)
@@ -235,8 +242,94 @@ local function combatantOf(run: TurnRun, side: SideState): any
 	}
 end
 
+--[[
+	Per-move scratch space.
+
+	`damageDealt` is why this exists. Recoil and Drain are defined as fractions of what
+	the move already did, so the interpreter has to carry that number forward between
+	effects rather than recomputing it — a move that hits five times and then drains
+	must drain against all five hits, not against the last one.
+]]
+type MoveRun = {
+	damageDealt: number,
+}
+
+--[[ HP movement ----------------------------------------------------------- ]]
+
+-- Single funnel for every point of HP the engine removes, so the clamp, the faint
+-- event and the log entry cannot disagree between one caller and the next.
+local function dealDamage(
+	run: TurnRun,
+	side: SideState,
+	creature: CreatureInstance,
+	amount: number,
+	effectiveness: number,
+	isCritical: boolean
+): number
+	local applied = math.min(amount, creature.currentHp)
+	if applied <= 0 then
+		return 0
+	end
+
+	creature.currentHp -= applied
+	emit(run, {
+		kind = "DamageDealt",
+		sideId = side.id,
+		creatureUid = creature.uid,
+		amount = applied,
+		remainingHp = creature.currentHp,
+		effectiveness = effectiveness,
+		isCritical = isCritical,
+	})
+
+	if creature.currentHp <= 0 then
+		emit(run, { kind = "Fainted", sideId = side.id, creatureUid = creature.uid })
+	end
+	return applied
+end
+
+-- Returns 0 and logs nothing when there is nothing to restore, so a full-HP creature
+-- using recovery does not produce a misleading "healed 0" line.
+local function healCreature(
+	run: TurnRun,
+	side: SideState,
+	creature: CreatureInstance,
+	amount: number
+): number
+	local maxHp = run.dex.getStats(creature).hp
+	local applied = math.min(amount, maxHp - creature.currentHp)
+	if applied <= 0 then
+		return 0
+	end
+
+	creature.currentHp += applied
+	emit(run, {
+		kind = "Healed",
+		sideId = side.id,
+		creatureUid = creature.uid,
+		amount = applied,
+		remainingHp = creature.currentHp,
+	})
+	return applied
+end
+
+local function sideForTarget(
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+): SideState
+	local target = MoveEffectModule.targetOf(effect)
+	if target == "Self" or target == "UserSide" or target == "UserParty" then
+		return attackerSide
+	end
+	return defenderSide
+end
+
+--[[ Damage ---------------------------------------------------------------- ]]
+
 local function applyDamageEffect(
 	run: TurnRun,
+	moveRun: MoveRun,
 	effect: any,
 	move: Move,
 	attackerSide: SideState,
@@ -279,26 +372,116 @@ local function applyDamageEffect(
 
 		input.isCritical = DamageCalc.rollCritical(effect.critStageBonus or 0, run.rng)
 		local result = DamageCalc.compute(input, run.rng)
-
-		local applied = math.min(result.damage, defender.currentHp)
-		defender.currentHp -= applied
-
-		emit(run, {
-			kind = "DamageDealt",
-			sideId = defenderSide.id,
-			creatureUid = defender.uid,
-			amount = applied,
-			remainingHp = defender.currentHp,
-			effectiveness = result.effectiveness,
-			isCritical = result.isCritical,
-		})
+		moveRun.damageDealt += dealDamage(
+			run,
+			defenderSide,
+			defender,
+			result.damage,
+			result.effectiveness,
+			result.isCritical
+		)
 
 		if defender.currentHp <= 0 then
-			emit(run, { kind = "Fainted", sideId = defenderSide.id, creatureUid = defender.uid })
 			break
 		end
 	end
 end
+
+--[[
+	Damage that ignores the formula. Type effectiveness does not SCALE it — that is the
+	point of the primitive — but an immunity still stops it, matching Gen 5, where a
+	fixed-damage move cannot reach something its type fundamentally cannot touch.
+]]
+local function applyFixedDamage(
+	run: TurnRun,
+	moveRun: MoveRun,
+	effect: any,
+	move: Move,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local attacker = activeOf(attackerSide)
+	local targetSide = sideForTarget(effect, attackerSide, defenderSide)
+	local target = activeOf(targetSide)
+
+	if effect.respectsTypeChart ~= false and targetSide ~= attackerSide then
+		local effectiveness = TypeChart.effectiveness(move.typeId, run.dex.getTyping(target))
+		if effectiveness == 0 then
+			emit(run, {
+				kind = "MoveFailed",
+				sideId = attackerSide.id,
+				creatureUid = attacker.uid,
+				moveId = move.id,
+				reason = "NoEffect",
+			})
+			return
+		end
+	end
+
+	local amount: number
+	if effect.mode == "UserLevel" then
+		amount = attacker.level
+	elseif effect.mode == "TargetCurrentHpFraction" then
+		amount = math.floor(target.currentHp * (effect.value or 0))
+	else
+		amount = effect.value or 0
+	end
+
+	-- A connecting hit always does something.
+	moveRun.damageDealt += dealDamage(run, targetSide, target, math.max(1, amount), 1, false)
+end
+
+--[[ Recoil and drain ------------------------------------------------------- ]]
+
+local function applyRecoil(run: TurnRun, moveRun: MoveRun, effect: any, attackerSide: SideState)
+	local attacker = activeOf(attackerSide)
+
+	local amount: number
+	if effect.fractionOfUserMaxHp ~= nil then
+		-- Unconditional: this is the user's own cost, not a share of the outcome.
+		local maxHp = run.dex.getStats(attacker).hp
+		amount = math.max(1, math.floor(maxHp * effect.fractionOfUserMaxHp))
+	else
+		if moveRun.damageDealt <= 0 then
+			-- Nothing landed, so there is nothing to take a fraction of. Charging the
+			-- minimum here would bill a player for an immunity they could not see.
+			return
+		end
+		amount = math.max(1, math.floor(moveRun.damageDealt * effect.fractionOfDamageDealt))
+	end
+
+	dealDamage(run, attackerSide, attacker, amount, 1, false)
+end
+
+local function applyDrain(run: TurnRun, moveRun: MoveRun, effect: any, attackerSide: SideState)
+	if moveRun.damageDealt <= 0 then
+		return
+	end
+	local amount = math.max(1, math.floor(moveRun.damageDealt * effect.fractionOfDamageDealt))
+	healCreature(run, attackerSide, activeOf(attackerSide), amount)
+end
+
+local function applyHeal(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local targetSide = sideForTarget(effect, attackerSide, defenderSide)
+	local target = activeOf(targetSide)
+
+	local amount: number
+	if effect.flat ~= nil then
+		amount = effect.flat
+	else
+		local maxHp = run.dex.getStats(target).hp
+		amount = math.max(1, math.floor(maxHp * effect.fractionOfMaxHp))
+	end
+
+	healCreature(run, targetSide, target, amount)
+end
+
+--[[ Status and stages ------------------------------------------------------ ]]
 
 local function applyInflictStatus(
 	run: TurnRun,
@@ -306,12 +489,8 @@ local function applyInflictStatus(
 	attackerSide: SideState,
 	defenderSide: SideState
 )
-	local target = if MoveEffectModule.targetOf(effect) == "Self"
-		then activeOf(attackerSide)
-		else activeOf(defenderSide)
-	local targetSide = if MoveEffectModule.targetOf(effect) == "Self"
-		then attackerSide
-		else defenderSide
+	local targetSide = sideForTarget(effect, attackerSide, defenderSide)
+	local target = activeOf(targetSide)
 
 	if not StatusEffects.canApply(target.status, effect.status) then
 		return
@@ -336,7 +515,7 @@ local function applyStatStageEffect(
 	attackerSide: SideState,
 	defenderSide: SideState
 )
-	local side = if MoveEffectModule.targetOf(effect) == "Self" then attackerSide else defenderSide
+	local side = sideForTarget(effect, attackerSide, defenderSide)
 	if not run.rng:nextBoolean(MoveEffectModule.chanceOf(effect)) then
 		return
 	end
@@ -357,15 +536,26 @@ local function applyStatStageEffect(
 	})
 end
 
+--[[ Dispatch --------------------------------------------------------------- ]]
+
 local function applyEffect(
 	run: TurnRun,
+	moveRun: MoveRun,
 	effect: MoveEffect,
 	move: Move,
 	attackerSide: SideState,
 	defenderSide: SideState
 )
 	if effect.kind == "Damage" then
-		applyDamageEffect(run, effect, move, attackerSide, defenderSide)
+		applyDamageEffect(run, moveRun, effect, move, attackerSide, defenderSide)
+	elseif effect.kind == "FixedDamage" then
+		applyFixedDamage(run, moveRun, effect, move, attackerSide, defenderSide)
+	elseif effect.kind == "Recoil" then
+		applyRecoil(run, moveRun, effect, attackerSide)
+	elseif effect.kind == "Drain" then
+		applyDrain(run, moveRun, effect, attackerSide)
+	elseif effect.kind == "Heal" then
+		applyHeal(run, effect, attackerSide, defenderSide)
 	elseif effect.kind == "InflictStatus" then
 		applyInflictStatus(run, effect, attackerSide, defenderSide)
 	elseif effect.kind == "StatStage" then
@@ -373,7 +563,7 @@ local function applyEffect(
 	else
 		error(
 			`TurnResolver: effect "{effect.kind}" is not implemented in this phase. `
-				.. `Implemented: Damage, InflictStatus, StatStage.`
+				.. `Implemented: Damage, FixedDamage, Recoil, Drain, Heal, InflictStatus, StatStage.`
 		)
 	end
 end
@@ -513,8 +703,9 @@ local function performMove(run: TurnRun, side: SideState, intent: any)
 		return
 	end
 
+	local moveRun: MoveRun = { damageDealt = 0 }
 	for _, effect in move.effects do
-		applyEffect(run, effect, move, side, defenderSide)
+		applyEffect(run, moveRun, effect, move, side, defenderSide)
 	end
 end
 

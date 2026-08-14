@@ -156,3 +156,68 @@ accuracy-gated instead turns a read into a coin flip.
 **Reversal.** One field.
 
 ---
+## D9 — Capture moved from Stage 3 to Stage 4, where its maths lives
+
+**Decision.** Stage 3 implements 15 of the 16 remaining primitives. `Capture` is
+implemented in Stage 4 alongside `Capture.luau`.
+
+**Why.** Capture is the one primitive whose behaviour is a whole module rather than a
+few lines. Implementing the effect in Stage 3 would have meant either stubbing it and
+implementing it twice, or pulling Stage 4's capture formula forward into Stage 3 and
+losing the commit boundary the brief asked for.
+
+**Reversal.** None needed — it lands in the next commit either way.
+
+---
+
+## D10 — TurnResolver imports Data/TypeChart, and the "no edge to Data" claim was narrowed
+
+**Decision.** `FixedDamage` needs to know whether the target is immune, so TurnResolver
+now imports `Data/TypeChart`. The module header's claim that the engine "never reads
+src/shared/Data directly" was rewritten rather than left standing.
+
+**Why this is not a contradiction.** The chart is RULES, not content — as much part of
+the battle system as the damage formula, and it changes about as often. DamageCalc has
+imported it since Stage 1 of the previous session, so the original claim was already
+inaccurate. The tables the injected dex exists to keep out are the CONTENT tables,
+Moves and Species, which change whenever anyone rebalances anything.
+
+**Alternative considered.** Route the immunity probe through DamageCalc, as the Damage
+path does. Rejected: it would mean constructing a fake Damage effect to ask a question
+about a FixedDamage one, which is more indirection for less clarity.
+
+**Reversal.** Add `getEffectiveness` to BattleDex and inject it; two lines plus every
+dex construction site.
+
+---
+
+## D11 — Damage-scaled recoil charges nothing when the move dealt nothing
+
+**Decision.** `Recoil.fractionOfDamageDealt` returns early when the move dealt zero
+damage. `Recoil.fractionOfUserMaxHp` still applies unconditionally.
+
+**Why the asymmetry.** The two fractions mean different things. A fraction of the user's
+max HP is the move's own price, paid for using it. A fraction of the damage dealt is a
+share of an outcome, and there is no share of nothing. Charging the one-point minimum
+against an immunity would bill a player for information they could not have had.
+
+**Alternatives.** Charge the minimum regardless, which is simpler and arguably more
+punishing-by-design.
+
+**Reversal.** Delete the early return in `applyRecoil`; one test covers it directly.
+
+---
+
+## D12 — Every point of HP the engine removes goes through one function
+
+**Decision.** `dealDamage` and `healCreature` are the only places HP changes during
+effect resolution. Damage, FixedDamage and Recoil all call the same funnel.
+
+**Why.** Clamping at zero, emitting the faint event, and writing the log line are three
+things that must agree, and before this refactor the multi-hit loop did them inline
+while nothing else did them at all. A second caller doing it slightly differently is
+how a creature ends up at -3 HP or faints twice.
+
+**Reversal.** Inline it again, but the faint-event tests will hold you to the behaviour.
+
+---
