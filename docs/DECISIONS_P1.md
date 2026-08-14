@@ -26,9 +26,14 @@ seed".
 most of the hour. Or guess at a larger Engine — matchmaking, AI, persistence — none
 of which Phase 1 asks for.
 
-**Reversal.** Engine's public surface is small (`start`, `submitTurn`, `isOver`,
-`winner`). If the intended scope was different, the module is one file and its spec is
-one file; neither is depended on by anything below it.
+**What actually happened.** Capture was built as specified. Engine was NOT built — the
+session ran out of budget after the fifteen effect primitives and Capture. Nothing was
+started and half-finished; there is no Engine.luau and nothing references one.
+
+**Where that leaves it.** Engine is the last module before the Phase 1 gate, and the
+gate wants a full 6v6 battle resolving in the terminal from a fixed seed. It is worth
+its own session with the rest of the sentence attached, rather than the tail end of
+this one.
 
 ---
 
@@ -393,5 +398,52 @@ counterplay and no visible cause. That is the worst class of bug in a battle sys
 one where the state is wrong but nothing looks wrong.
 
 **Reversal.** Neither direction is needed if traps become duration-based instead.
+
+---
+## D23 — Capture always draws four times, even after a shake has failed
+
+**Decision.** `Capture.attempt` rolls all four shakes regardless of whether an earlier
+one already broke the ball. The reported shake count is how many passed before the
+first failure.
+
+**Why.** Stopping early would make the number of values taken from the RNG depend on
+the outcome, so a ball breaking on the first shake and one breaking on the third would
+leave the battle's stream in different places. Every roll after that point would
+diverge, and a bug report would stop replaying.
+
+**Cost.** Three wasted draws on a failed capture. Nothing measurable.
+
+**Reversal.** Break out of the loop; one line, and the determinism test will fail
+immediately, which is the point.
+
+---
+
+## D24 — A guaranteed capture consumes no randomness at all
+
+**Decision.** When the modified rate reaches 255, or the ball is flagged guaranteed,
+`attempt` returns without touching the RNG.
+
+**Tension with D23, resolved.** D23 fixes the draw count so the stream cannot depend on
+an outcome. This is different: the guaranteed branch is decided entirely by state the
+caller already has — HP, catch rate, ball, status — so it is predictable before the
+call rather than determined by it. Rolling four values to reach a foregone conclusion
+would be four values of noise in the stream for nothing.
+
+**Reversal.** Roll and discard; the "no rolls" assertion is one test.
+
+---
+
+## D25 — The Capture EFFECT is still unimplemented, deliberately
+
+**Decision.** `Capture.luau` is complete and tested, but TurnResolver's dispatch still
+raises for `effect.kind == "Capture"`, with a message pointing at the item path.
+
+**Why.** The effect needs the target's catch rate, which lives in Species, which does
+not exist. It also only makes sense from an Item intent, and Item intents are Engine's.
+Wiring it now would mean adding `getCatchRate` to BattleDex for one caller that cannot
+be exercised end to end yet.
+
+**Reversal.** Add `getCatchRate` to BattleDex and dispatch to `Capture.attempt`; the
+maths is done and tested, so it is a handful of lines whenever the item path lands.
 
 ---
