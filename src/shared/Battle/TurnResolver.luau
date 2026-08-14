@@ -174,7 +174,11 @@ end
 	are, never on how they compared. Drawing lazily would make the RNG stream depend
 	on the speeds, and a battle would stop replaying the moment a stat changed.
 ]]
-local function orderActions(entries: { ActionEntry }, rng: Rng): { ActionEntry }
+local function orderActions(
+	entries: { ActionEntry },
+	rng: Rng,
+	invertSpeed: boolean?
+): { ActionEntry }
 	local bySide = table.clone(entries)
 	table.sort(bySide, function(a, b)
 		return a.sideId < b.sideId
@@ -195,6 +199,9 @@ local function orderActions(entries: { ActionEntry }, rng: Rng): { ActionEntry }
 			return a.entry.priority > b.entry.priority
 		end
 		if a.entry.speed ~= b.entry.speed then
+			if invertSpeed == true then
+				return a.entry.speed < b.entry.speed
+			end
 			return a.entry.speed > b.entry.speed
 		end
 		if a.tiebreak ~= b.tiebreak then
@@ -336,6 +343,256 @@ local function sideForTarget(
 	return defenderSide
 end
 
+--[[ The ground ------------------------------------------------------------ ]]
+
+--[[
+	Hazards.
+
+	Caltrops stacks and takes a flat share; the fractions are Gen 5's spike layers.
+	Sigilstones scales against the entrant's typing, which is what makes it the hazard
+	that punishes a specific team rather than every team equally — it needs a type to
+	measure against, and Arcane is the thematic fit for a laid sigil.
+]]
+local HAZARD_MAX_LAYERS: { [string]: number } = {
+	Caltrops = 3,
+	Sigilstones = 1,
+	Miasma = 1,
+	Snarewire = 1,
+}
+
+local CALTROPS_FRACTION: { [number]: number } = { [1] = 1 / 8, [2] = 1 / 6, [3] = 1 / 4 }
+local SIGILSTONE_TYPE = "Arcane"
+local SIGILSTONE_BASE_FRACTION = 1 / 8
+
+-- Weather that hurts. The exempt list matters: a weather that damages the type it is
+-- made of reads as a bug to a player however defensible the arithmetic.
+local FIELD_CHIP_EXEMPT: { [string]: { string } } = {
+	Whiteout = { "Frost" },
+	Duststorm = { "Terra", "Forge" },
+}
+local FIELD_CHIP_DENOMINATOR = 16
+
+-- Weather that changes damage rather than dealing it.
+local FIELD_TYPE_BIAS: { [string]: { boosted: string, damped: string } } = {
+	Emberveil = { boosted = "Flame", damped = "Aqua" },
+	Downpour = { boosted = "Aqua", damped = "Flame" },
+}
+
+local SCREEN_FOR_CLASS: { [string]: string } = {
+	Physical = "Bulwark",
+	Special = "Veilward",
+}
+
+local SLIPSTREAM_MULTIPLIER = 2
+
+-- Same invariance problem as volatiles: an indexer keyed by a union rejects a literal
+-- key. Every key used through these comes from the closed lists in Types/MoveEffect.
+local function hazardsOf(side: SideState): { [string]: number }
+	return side.hazards :: any
+end
+
+local function conditionsOf(side: SideState): { [string]: number }
+	return side.sideConditions :: any
+end
+
+--[[ Hazards on entry ------------------------------------------------------- ]]
+
+--[[
+	The tax a hazard exists to collect. A hazard that never fires is a wasted turn with
+	a nice log line, so this runs on every entry — voluntary switch or forced.
+]]
+local function applyHazardsOnEntry(run: TurnRun, side: SideState)
+	local hazards = hazardsOf(side)
+	local creature = activeOf(side)
+	local maxHp = run.dex.getStats(creature).hp
+
+	local caltropLayers = hazards.Caltrops
+	if caltropLayers ~= nil and creature.currentHp > 0 then
+		local fraction = CALTROPS_FRACTION[math.clamp(caltropLayers, 1, 3)]
+		local amount = math.max(1, math.floor(maxHp * fraction))
+		local applied = math.min(amount, creature.currentHp)
+		creature.currentHp -= applied
+		emit(run, {
+			kind = "HazardDamage",
+			sideId = side.id,
+			creatureUid = creature.uid,
+			hazard = "Caltrops",
+			amount = applied,
+		})
+		if creature.currentHp <= 0 then
+			emit(run, { kind = "Fainted", sideId = side.id, creatureUid = creature.uid })
+		end
+	end
+
+	if hazards.Sigilstones ~= nil and creature.currentHp > 0 then
+		local effectiveness =
+			TypeChart.effectiveness(SIGILSTONE_TYPE :: any, run.dex.getTyping(creature))
+		local amount = math.max(1, math.floor(maxHp * SIGILSTONE_BASE_FRACTION * effectiveness))
+		if effectiveness > 0 then
+			local applied = math.min(amount, creature.currentHp)
+			creature.currentHp -= applied
+			emit(run, {
+				kind = "HazardDamage",
+				sideId = side.id,
+				creatureUid = creature.uid,
+				hazard = "Sigilstones",
+				amount = applied,
+			})
+			if creature.currentHp <= 0 then
+				emit(run, { kind = "Fainted", sideId = side.id, creatureUid = creature.uid })
+			end
+		end
+	end
+
+	if hazards.Miasma ~= nil and creature.currentHp > 0 then
+		if StatusEffects.canApply(creature.status, "Poison") then
+			creature.status = "Poison"
+			creature.statusTurns = nil
+			emit(run, {
+				kind = "StatusInflicted",
+				sideId = side.id,
+				creatureUid = creature.uid,
+				status = "Poison",
+			})
+		end
+	end
+
+	if hazards.Snarewire ~= nil and creature.currentHp > 0 then
+		local change = StatStages.change(side.active.stages, "spe", -1)
+		side.active.stages = change.stages
+		if change.applied ~= 0 then
+			emit(run, {
+				kind = "StatStageChanged",
+				sideId = side.id,
+				creatureUid = creature.uid,
+				stat = "spe",
+				delta = change.applied,
+				newStage = change.newStage,
+			})
+		end
+	end
+end
+
+--[[ Field-aware modifiers -------------------------------------------------- ]]
+
+-- Screens and weather, folded into DamageCalc's trailing modifier slot. That slot is
+-- applied last, after burn, which differs from Gen 5's ordering by at most one point
+-- and keeps the formula from needing to know what a screen is.
+local function trailingModifierFor(
+	run: TurnRun,
+	effect: any,
+	move: Move,
+	defenderSide: SideState
+): number
+	local modifier = 1
+
+	local screen = SCREEN_FOR_CLASS[effect.damageClass]
+	if screen ~= nil and conditionsOf(defenderSide)[screen] ~= nil then
+		modifier *= 0.5
+	end
+
+	local activeField = run.state.field.activeField
+	if activeField ~= nil then
+		local bias = FIELD_TYPE_BIAS[activeField]
+		if bias ~= nil then
+			if move.typeId == bias.boosted then
+				modifier *= 1.5
+			elseif move.typeId == bias.damped then
+				modifier *= 0.5
+			end
+		end
+	end
+
+	return modifier
+end
+
+-- Speed with the side's own conditions folded in, which effectiveSpeed cannot see
+-- because it takes a creature rather than a side.
+local function sideSpeed(run: TurnRun, side: SideState): number
+	local creature = activeOf(side)
+	local speed = effectiveSpeed(run.dex.getStats(creature), side.active.stages, creature.status)
+	if conditionsOf(side).Slipstream ~= nil then
+		speed *= SLIPSTREAM_MULTIPLIER
+	end
+	return speed
+end
+
+--[[ The four primitives ---------------------------------------------------- ]]
+
+local function applySetHazard(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local side = sideForTarget(effect, attackerSide, defenderSide)
+	local hazards = hazardsOf(side)
+	local cap = HAZARD_MAX_LAYERS[effect.hazard] or 1
+	local current = hazards[effect.hazard] or 0
+
+	if current >= cap then
+		return
+	end
+
+	local layers = math.min(cap, current + (effect.layers or 1))
+	hazards[effect.hazard] = layers
+	emit(run, { kind = "HazardSet", sideId = side.id, hazard = effect.hazard, layers = layers })
+end
+
+local function applySetSideCondition(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local side = sideForTarget(effect, attackerSide, defenderSide)
+	local conditions = conditionsOf(side)
+	if conditions[effect.condition] ~= nil then
+		return
+	end
+
+	conditions[effect.condition] = effect.duration
+	emit(run, {
+		kind = "SideConditionSet",
+		sideId = side.id,
+		condition = effect.condition,
+		turnsRemaining = effect.duration,
+	})
+end
+
+local function applyClearSide(
+	run: TurnRun,
+	effect: any,
+	attackerSide: SideState,
+	defenderSide: SideState
+)
+	local side = sideForTarget(effect, attackerSide, defenderSide)
+	local cleared = false
+
+	if effect.hazards == true then
+		for hazard in hazardsOf(side) do
+			hazardsOf(side)[hazard] = nil
+			cleared = true
+		end
+	end
+	if effect.sideConditions == true then
+		for condition in conditionsOf(side) do
+			conditionsOf(side)[condition] = nil
+			cleared = true
+		end
+	end
+
+	if cleared then
+		emit(run, { kind = "SideCleared", sideId = side.id })
+	end
+end
+
+local function applySetField(run: TurnRun, effect: any)
+	run.state.field.activeField = effect.field
+	run.state.field.fieldTurnsRemaining = effect.duration
+	emit(run, { kind = "FieldSet", field = effect.field, turnsRemaining = effect.duration })
+end
+
 --[[ Damage ---------------------------------------------------------------- ]]
 
 local function applyDamageEffect(
@@ -355,6 +612,7 @@ local function applyDamageEffect(
 		move = move,
 		effect = effect,
 		isCritical = false,
+		otherModifier = trailingModifierFor(run, effect, move, defenderSide),
 	}
 
 	--[[
@@ -506,6 +764,11 @@ local function applyInflictStatus(
 	if not StatusEffects.canApply(target.status, effect.status) then
 		return
 	end
+	-- Sanctuary is a shield over the whole side, so it stops the status before the
+	-- chance is even rolled.
+	if targetSide ~= attackerSide and conditionsOf(targetSide).Sanctuary ~= nil then
+		return
+	end
 	if not run.rng:nextBoolean(MoveEffectModule.chanceOf(effect)) then
 		return
 	end
@@ -528,6 +791,11 @@ local function applyStatStageEffect(
 )
 	local side = sideForTarget(effect, attackerSide, defenderSide)
 	if not run.rng:nextBoolean(MoveEffectModule.chanceOf(effect)) then
+		return
+	end
+	-- Mistveil stops the opponent lowering your stats. It never blocks your own
+	-- choices, which is why the attacker's side is exempt.
+	if side ~= attackerSide and effect.delta < 0 and conditionsOf(side).Mistveil ~= nil then
 		return
 	end
 
@@ -730,11 +998,20 @@ local function applyEffect(
 		applyApplyVolatile(run, effect, attackerSide, defenderSide)
 	elseif effect.kind == "RemoveVolatile" then
 		applyRemoveVolatile(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "SetHazard" then
+		applySetHazard(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "SetSideCondition" then
+		applySetSideCondition(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "ClearSide" then
+		applyClearSide(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "SetField" then
+		applySetField(run, effect)
 	else
 		error(
 			`TurnResolver: effect "{effect.kind}" is not implemented in this phase. `
 				.. `Implemented: Damage, FixedDamage, Recoil, Drain, Heal, InflictStatus, `
-				.. `StatStage, CureStatus, ResetStatStages, ApplyVolatile, RemoveVolatile.`
+				.. `StatStage, CureStatus, ResetStatStages, ApplyVolatile, RemoveVolatile, `
+				.. `SetHazard, SetSideCondition, ClearSide, SetField.`
 		)
 	end
 end
@@ -773,6 +1050,8 @@ local function performSwitch(run: TurnRun, side: SideState, intent: any)
 		creatureUid = incoming.uid,
 		partyIndex = partyIndex,
 	})
+
+	applyHazardsOnEntry(run, side)
 end
 
 --[[
@@ -968,14 +1247,88 @@ local function expireVolatiles(run: TurnRun)
 	end
 end
 
+local function isExemptFromField(fieldId: string, typing: { TypeId }): boolean
+	local exempt = FIELD_CHIP_EXEMPT[fieldId]
+	if exempt == nil then
+		return true
+	end
+	for _, exemptType in exempt do
+		for _, typeId in typing do
+			if typeId == exemptType then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function runFieldChip(run: TurnRun, side: SideState)
+	local activeField = run.state.field.activeField
+	if activeField == nil or FIELD_CHIP_EXEMPT[activeField] == nil then
+		return
+	end
+
+	local creature = activeOf(side)
+	if creature.currentHp <= 0 then
+		return
+	end
+	if isExemptFromField(activeField, run.dex.getTyping(creature)) then
+		return
+	end
+
+	local maxHp = run.dex.getStats(creature).hp
+	dealDamage(
+		run,
+		side,
+		creature,
+		math.max(1, math.floor(maxHp / FIELD_CHIP_DENOMINATOR)),
+		1,
+		false
+	)
+end
+
+local function tickSideConditions(run: TurnRun)
+	for _, side in run.state.sides do
+		local conditions = conditionsOf(side)
+		local expired: { string } = {}
+		for condition, turns in conditions do
+			local remaining = turns - 1
+			if remaining <= 0 then
+				table.insert(expired, condition)
+			else
+				conditions[condition] = remaining
+			end
+		end
+		table.sort(expired)
+		for _, condition in expired do
+			conditions[condition] = nil
+			emit(
+				run,
+				{ kind = "SideConditionEnded", sideId = side.id, condition = condition :: any }
+			)
+		end
+	end
+end
+
+local function tickField(run: TurnRun)
+	local activeField = run.state.field.activeField
+	if activeField == nil then
+		return
+	end
+	local remaining = run.state.field.fieldTurnsRemaining - 1
+	if remaining <= 0 then
+		run.state.field.activeField = nil
+		run.state.field.fieldTurnsRemaining = 0
+		emit(run, { kind = "FieldEnded", field = activeField :: any })
+		return
+	end
+	run.state.field.fieldTurnsRemaining = remaining
+end
+
 local function runEndOfTurn(run: TurnRun)
 	local order = {}
 	for _, side in run.state.sides do
-		local creature = activeOf(side)
-		table.insert(order, {
-			side = side,
-			speed = effectiveSpeed(run.dex.getStats(creature), side.active.stages, creature.status),
-		})
+		table.insert(order, { side = side, speed = sideSpeed(run, side) })
 	end
 	table.sort(order, function(a, b): boolean
 		if a.speed ~= b.speed then
@@ -983,6 +1336,10 @@ local function runEndOfTurn(run: TurnRun)
 		end
 		return a.side.id < b.side.id
 	end)
+
+	for _, item in order do
+		runFieldChip(run, item.side)
+	end
 
 	for _, item in order do
 		local side = item.side
@@ -1042,16 +1399,15 @@ local function resolveTurn(
 				sideId = side.id,
 				kind = intent.kind,
 				priority = priority,
-				speed = effectiveSpeed(
-					run.dex.getStats(creature),
-					side.active.stages,
-					creature.status
-				),
+				speed = sideSpeed(run, side),
 			})
 		end
 	end
 
-	for _, entry in orderActions(entries, run.rng) do
+	-- Inversion reverses the speed comparison and nothing above it: the priority
+	-- bracket and the switch-before-moves rule are untouched.
+	local inverted = run.state.field.activeField == "Inversion"
+	for _, entry in orderActions(entries, run.rng, inverted) do
 		local side = sideById(run.state, entry.sideId)
 
 		-- Liveness is re-checked here, not taken from the snapshot. A creature that
@@ -1073,6 +1429,8 @@ local function resolveTurn(
 
 	runEndOfTurn(run)
 	expireVolatiles(run)
+	tickSideConditions(run)
+	tickField(run)
 
 	run.state.turn += 1
 	for _, event in run.events do

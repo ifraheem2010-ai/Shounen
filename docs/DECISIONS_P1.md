@@ -279,3 +279,68 @@ condition, it is a minor inconvenience. Curing sleep is what a cleric teammate i
 tests for sleep would all need revisiting, and the status would stop mattering.
 
 ---
+## D16 — Sigilstones measure themselves as Arcane
+
+**Decision.** The type-scaled hazard uses `Arcane` for its effectiveness lookup, at a
+1/8 base fraction, so an entrant takes anywhere from 1/32 to 1/2 of its maximum HP.
+
+**Why a type is needed at all.** The whole point of a type-scaled hazard is that it
+punishes a specific team composition rather than taxing everyone equally, and that
+requires something to measure against.
+
+**Why Arcane.** A laid sigil is the thematic fit, and it puts the pressure on Ki, Feral
+and Aqua — none of which is the type most likely to be switching repeatedly, so it
+does not simply reinforce whatever is already strong.
+
+**Alternatives.** Forge, since the hazard-setting reference move is Forge. Rejected:
+Forge's 2x list (Martial, Frost, Terra) overlaps heavily with the physical attackers
+that already want to stay in, so it would have been close to a dead hazard.
+
+**Reversal.** `SIGILSTONE_TYPE` is one constant in TurnResolver.
+
+---
+
+## D17 — Screens and weather ride DamageCalc's trailing modifier slot
+
+**Decision.** Bulwark, Veilward and the two biasing weathers are folded into the
+`otherModifier` field DamageCalc already exposes, rather than teaching the formula what
+a screen is.
+
+**Cost, stated plainly.** That slot is applied LAST, after burn. Gen 5 applies weather
+earlier in the chain. Because every step truncates, the two orderings can differ by a
+point in stacked cases.
+
+**Why accept it.** The alternative is DamageCalc reading BattleState, which would turn a
+pure function over numbers into something that needs a whole battle to test. A
+one-point difference in a stacked-modifier case is not worth that.
+
+**Reversal.** Add explicit `weather` and `screen` fields to DamageInput and apply them
+in Gen 5 order inside the formula.
+
+---
+
+## D18 — Weather exempts the types it is made of
+
+**Decision.** Duststorm does not chip Terra or Forge; Whiteout does not chip Frost.
+
+**Why.** A weather that damages the type it is made of reads as a bug to a player
+however defensible the arithmetic, and it also makes those types strictly worse under
+conditions their own characters are most likely to set.
+
+**Reversal.** `FIELD_CHIP_EXEMPT` is one table.
+
+---
+
+## D19 — Inversion reverses speed and nothing above it
+
+**Decision.** Under the Inversion field the speed comparison flips, but the priority
+bracket and the switch-before-moves rule are untouched.
+
+**Why.** Inverting priority as well would make a priority move go last, which no player
+would predict, and it would make phazing at -6 the fastest action in the game. Speed is
+the only axis Inversion is about.
+
+**Reversal.** `orderActions` takes `invertSpeed`; widening it to invert priority is a
+two-line change and a lot of broken expectations.
+
+---
