@@ -31,37 +31,53 @@ local MoveModule = require(Shared.Types.Move)
 
 type Move = MoveModule.Move
 
+--[[
+	Builds an arbitrary Move-shaped value.
+
+	`effectExtra` lands on the Damage effect (power modifiers, hitsRange, opt-outs);
+	`moveExtra` lands on the move itself (priority, accuracy). Exported because
+	TurnResolver's tests need moves this file has no reason to name — a move that
+	exists only to be slower than another one is not a fixture worth a constant.
+]]
 local function damagingMove(
 	id: string,
 	typeId: string,
 	damageClass: string,
 	power: number,
-	extra: { [string]: any }?
+	effectExtra: { [string]: any }?,
+	moveExtra: { [string]: any }?
 ): Move
 	local effect: { [string]: any } = {
 		kind = "Damage",
 		power = power,
 		damageClass = damageClass,
 	}
-	if extra ~= nil then
-		for key, value in extra do
+	if effectExtra ~= nil then
+		for key, value in effectExtra do
 			effect[key] = value
 		end
 	end
 
-	return {
+	local move: { [string]: any } = {
 		id = id,
 		name = id,
-		typeId = typeId :: any,
-		category = damageClass :: any,
+		typeId = typeId,
+		category = damageClass,
 		accuracy = 1,
 		pp = 10,
 		priority = 0,
 		targeting = "SingleOpponent",
-		effects = { effect :: any },
+		effects = { effect },
 		makesContact = damageClass == "Physical",
 		description = "Synthetic fixture. Not balance data.",
 	}
+	if moveExtra ~= nil then
+		for key, value in moveExtra do
+			move[key] = value
+		end
+	end
+
+	return move :: any
 end
 
 --[[
@@ -111,6 +127,7 @@ local STATUS_ONLY: Move = {
 }
 
 return {
+	build = damagingMove,
 	PHYSICAL_100_MARTIAL = PHYSICAL_100_MARTIAL,
 	SPECIAL_100_MARTIAL = SPECIAL_100_MARTIAL,
 	PHYSICAL_100_STORM = PHYSICAL_100_STORM,

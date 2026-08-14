@@ -56,6 +56,8 @@
 	nothing sets it until a later phase.
 ]]
 
+local StatStages = require(script.Parent.StatStages)
+local StatusEffects = require(script.Parent.StatusEffects)
 local TypeChart = require(script.Parent.Parent.Data.TypeChart)
 local MoveEffectModule = require(script.Parent.Parent.Types.MoveEffect)
 local MoveModule = require(script.Parent.Parent.Types.Move)
@@ -120,7 +122,7 @@ local MIN_RANDOM_FACTOR = 85
 local MAX_RANDOM_FACTOR = 100
 local STAB_MULTIPLIER = 1.5
 local CRITICAL_MULTIPLIER = 2
-local BURN_MULTIPLIER = 0.5
+local BURN_MULTIPLIER = StatusEffects.BURN_PHYSICAL_MULTIPLIER
 local MULTI_TARGET_MULTIPLIER = 0.75
 
 -- Gen 5 critical hit ladder. Stage 4 and above sit at one half.
@@ -135,18 +137,10 @@ local MAX_CRITICAL_CHANCE = 1 / 2
 
 --[[ Stat stages ------------------------------------------------------------ ]]
 
---[[
-	Gen 3+ stage multipliers: (2 + stage) / 2 upward, 2 / (2 - stage) downward.
-	So +1 is 1.5x, +6 is 4x, -1 is two thirds, -6 is one quarter — deliberately
-	asymmetric, so boosting is stronger than debuffing and setup is worth a turn.
-]]
-local function applyStage(stat: number, stage: number): number
-	local clamped = math.clamp(stage, StatBlockModule.MIN_STAGE, StatBlockModule.MAX_STAGE)
-	if clamped >= 0 then
-		return math.floor(stat * (2 + clamped) / 2)
-	end
-	return math.floor(stat * 2 / (2 - clamped))
-end
+-- Re-exported from StatStages so there is exactly one stage ladder in the engine.
+-- Two copies of this arithmetic would eventually disagree by a point, and a damage
+-- formula that disagrees with the stat display by a point is a week of debugging.
+local applyStage = StatStages.applyToStat
 
 --[[ Critical hits ---------------------------------------------------------- ]]
 
