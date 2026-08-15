@@ -84,20 +84,25 @@ C:\Websites\shounen\
 │   └── run-tests.luau        headless test entry point
 ├── docs/
 │   ├── TYPES.md              the type bible — read before ANY chart edit
-│   └── BUILD_PLAN.md         phases, gates, sequencing
+│   ├── BUILD_PLAN.md         phases, gates, sequencing
+│   ├── HANDOFF.md            start here after a context reset
+│   ├── DECISIONS_P1.md       32 engine decisions made without the owner
+│   └── DECISIONS_P2.md       9 content decisions made without the owner
 ├── src/
 │   ├── shared/
 │   │   ├── Types/            TypeId, StatBlock, Rng, MoveEffect, Move,
 │   │   │                     Species, CreatureInstance, BattleState,
 │   │   │                     BattleIntent
-│   │   ├── Data/             TypeChart.luau, Species, Moves, Learnsets,
-│   │   │                     Evolutions, Encounters, Dialogue
+│   │   ├── Data/             TypeChart, Moves, Species  (Learnsets, Evolutions,
+│   │   │                     Encounters, Dialogue DO NOT EXIST YET)
 │   │   └── Battle/           the headless engine — NO ROBLOX API
+│   │                         RNG, DamageCalc, StatCalc, StatStages,
+│   │                         StatusEffects, TurnResolver, Capture, Engine
 │   ├── server/
-│   │   └── Services/         BattleService, ProfileService, EncounterService
+│   │   └── Services/         EMPTY — no services written yet
 │   └── client/
-│       ├── Controllers/      input → intent
-│       └── UI/               React-lua components (P4)
+│       ├── Controllers/      EMPTY — P4
+│       └── UI/               EMPTY — P4
 └── tests/
     ├── TestKit.luau          the whole test framework, zero dependencies
     ├── battle/               engine + type chart + source-invariant suites
@@ -350,14 +355,14 @@ is the prompt to decide whether the addition is genuinely new.
 Two parallel tracks. The **design track stays exactly one phase ahead** of the
 code track.
 
-| Phase | Code track |
-|---|---|
-| **P0** | Tooling, repo skeleton, type chart, test harness, CI |
-| **P1** | Headless battle engine |
-| **P2** | Save system (ProfileStore) |
-| **P3** | World — routes, towns, encounters |
-| **P4** | UI (React-lua) |
-| **P5** | Vertical slice |
+| Phase | Code track | State |
+|---|---|---|
+| **P0** | Tooling, repo skeleton, type chart, test harness, CI | ✅ complete |
+| **P1** | Headless battle engine | ✅ complete, gate passed |
+| **P2** | Content tables, then the save system (ProfileStore) | 🔶 in progress |
+| **P3** | World — routes, towns, encounters | ⬜ |
+| **P4** | UI (React-lua) | ⬜ |
+| **P5** | Vertical slice | ⬜ |
 
 ### Phase 0 checklist
 
@@ -373,20 +378,79 @@ code track.
       plus TypeId, StatBlock, Rng, BattleIntent)
 - [x] Rojo tree finalised
 
-**P0 is complete. P1 is next: the headless battle engine.**
+**P0 is complete.**
 
-### Phase 1 gate — PASSED
+### Phase 1 — COMPLETE, gate passed
 
 **Required: 200+ tests green AND a full 6v6 battle resolving in the terminal from a
-fixed seed.**
+fixed seed.** Both met.
 
-Both met. 504 tests green, and `lune run gate-6v6` resolves a full 6v6 from seed
-12345 in 17 turns and 101 events, then replays it and compares the two logs line
-for line. UI work (P4) is unblocked, but P2 and P3 come first.
+`lune run gate-6v6` resolves a full 6v6 from seed 12345 — now on the real move,
+species and stat tables — then replays it and compares the two logs line for line.
 
-Phase 1 scope: 1v1 and 6v6, move/switch/item/run actions, Gen-5 damage formula,
-the 12-type chart, 5 status conditions (Burn, Poison, Paralysis, Sleep, Freeze),
-stat stages −6..+6, priority, and capture.
+Phase 1 scope, all delivered: 1v1 and 6v6, move/switch/item/run actions, the Gen-5
+damage formula, the 12-type chart, 5 status conditions, stat stages −6..+6,
+priority, and capture. All **19 effect primitives** execute. Engine drives the turn
+loop, detects the end, prompts for forced replacements, and wires items and capture.
+
+Every judgement call made without the owner present is in `docs/DECISIONS_P1.md`
+(32 entries). Read it before changing anything in `src/shared/Battle/`.
+
+### Phase 2 — IN PROGRESS
+
+| | |
+|---|---|
+| `Data/Species.luau` | ✅ 9 species — the three starter lines, three stages each |
+| `Battle/StatCalc.luau` | ✅ Gen-5 stat formula, base stats to battle stats |
+| Gate battle on real data | ✅ real Moves + Species + StatCalc |
+| Save system (ProfileStore) | ⬜ **not started** — this is what P2 is actually for |
+
+Phase 2 decisions are in `docs/DECISIONS_P2.md` (9 entries).
+
+**Species landed before the save system on purpose.** Everything downstream —
+encounters, save data, learnsets, evolution, UI — points at Species, so it lands
+first or it forces rework.
+
+### What is NOT done
+
+Nothing below exists. Do not assume otherwise from the presence of a type for it.
+
+| Area | State |
+|---|---|
+| `src/server/Services/` | **Empty.** No ProfileService, BattleService, EncounterService |
+| `src/client/` | **Empty.** No UI, no controllers. P4, gated behind P2 and P3 |
+| `Data/Learnsets.luau` | Does not exist — learnsets live inline on each species, fine for 9, not for 150 |
+| `Data/Evolutions.luau` | Does not exist — evolution rules live inline on each species |
+| `Data/Encounters.luau` | Does not exist. No routes, no rarity tiers, no level bands |
+| `Data/Dialogue.luau` | Does not exist. No NPCs, no trainers, no gym |
+| Species beyond the starters | 9 of a planned 18–24 for the slice. Nine other types have no character at all |
+| Items | No item table. The engine's item path works; nothing feeds it |
+
+### Stubbed, inert, or knowingly incomplete
+
+These all WORK in the sense that they do not crash. They do less than they look like
+they do, and each is machine-checked or documented so it cannot be forgotten.
+
+- **Ten of the thirteen volatiles are inert.** Only Recharge, Flinch and Taunt change
+  engine behaviour. Confusion, Protect, Endure, Substitute, LeechSeed, Encore,
+  Charging, Locked, Bound and FocusEnergy are stored faithfully and read by nobody.
+  `tests/battle/VolatileGap.spec.luau` asserts exactly which are live, in both
+  directions — implementing one without recording it fails the suite.
+- **No weather source.** `SetField` works and all five fields have effects, but no
+  move in the table sets one, so weather never occurs in play.
+- **Item targeting is active-only.** `targetPartyIndex` is accepted and ignored, so a
+  potion cannot be used on a benched creature.
+- **No natures.** A second hidden stat layer, deliberately absent. Adding them is a
+  `schemaVersion` bump plus a migration.
+- **No abilities.** Not scoped at all. When they arrive they need the same closed
+  vocabulary treatment the effects got, or the engine starts special-casing again.
+- **Six of nine species have no same-type move before level 10.** The move table holds
+  exactly one move per starter type and two are endgame tiers.
+  `Species.NO_EARLY_STAB` records the exact set; three low-tier moves empty it. This
+  measurably breaks the starter triangle at low level — see `DECISIONS_P2.md` P9.
+- **DamageCalc omits Gen 5's 4096 fixed-point modifier chain.** Plain truncating
+  multiplication instead, which is what standard Gen-5 calculators do. Can differ by
+  one point in stacked-modifier cases.
 
 ### Deferred deliberately
 
