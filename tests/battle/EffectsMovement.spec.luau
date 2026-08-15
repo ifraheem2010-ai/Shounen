@@ -220,6 +220,35 @@ describe("Effects / SelfSwitch", function()
 		expect(outcome.state.sides[1].active.stages.atk).toBe(3)
 	end)
 
+	--[[
+		A chooser is the outside world, and the outside world sends party index 99. This
+		is TurnResolver's own check — Engine validates separately for the faint path, and
+		neither should be relying on the other.
+	]]
+	it("rejects a replacement the chooser had no right to name", function()
+		local state = scene({ oneMoves = { "pivot" } })
+		expect(function()
+			TurnResolver.resolveTurn(state, ONE, {
+				dex = Battle.dex({ species = SPECIES, moves = ALL_MOVES }),
+				rng = RNG.new(1),
+				chooseReplacement = function(): number
+					return 99
+				end,
+			})
+		end).toThrow("not one of the legal replacements")
+	end)
+
+	it("uses the chooser's answer when it is legal", function()
+		local outcome = TurnResolver.resolveTurn(scene({ oneMoves = { "pivot" } }), ONE, {
+			dex = Battle.dex({ species = SPECIES, moves = ALL_MOVES }),
+			rng = RNG.new(1),
+			chooseReplacement = function(): number
+				return 3
+			end,
+		})
+		expect(outcome.state.sides[1].active.partyIndex).toBe(3)
+	end)
+
 	it("does nothing when there is nobody to switch to", function()
 		local outcome = resolve(scene({ oneMoves = { "pivot" }, a2Hp = 0, a3Hp = 0 }), ONE)
 		expect(outcome.state.sides[1].active.partyIndex).toBe(1)

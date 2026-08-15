@@ -39,6 +39,7 @@
 	silently does nothing is far harder to notice than one that stops the test run.
 ]]
 
+local Capture = require(script.Parent.Capture)
 local DamageCalc = require(script.Parent.DamageCalc)
 local StatStages = require(script.Parent.StatStages)
 local StatusEffects = require(script.Parent.StatusEffects)
@@ -65,16 +66,36 @@ type StatBlock = StatBlockModule.StatBlock
 type StatusId = MoveEffectModule.StatusId
 type TypeId = TypeIdModule.TypeId
 
+export type Item = {
+	id: string,
+	name: string,
+	effects: { MoveEffect },
+}
+
 export type BattleDex = {
 	getMove: (moveId: string) -> Move,
 	-- Computed battle stats, with level, IVs and EVs already folded in.
 	getStats: (creature: CreatureInstance) -> StatBlock,
 	getTyping: (creature: CreatureInstance) -> { TypeId },
+	-- Only needed once a battle can use items. Absent is fine; the item path says so
+	-- rather than silently doing nothing.
+	getItem: ((itemId: string) -> Item)?,
+	-- Only needed for Capture. Comes from Species, which does not exist yet.
+	getCatchRate: ((creature: CreatureInstance) -> number)?,
 }
 
+--[[
+	`chooseReplacement` is how a decision from outside the simulation reaches a move
+	that needs one mid-turn. A pivot move withdraws the user and somebody has to say
+	who comes in; TurnResolver cannot ask, so the caller supplies an answer function.
+
+	It is optional. Without it a replacement is drawn from the RNG, which keeps the
+	engine self-contained for tests that do not care who arrives.
+]]
 export type TurnContext = {
 	dex: BattleDex,
 	rng: Rng,
+	chooseReplacement: ((sideId: number, legal: { number }, state: BattleState) -> number)?,
 }
 
 export type ActionEntry = {
@@ -94,6 +115,7 @@ type TurnRun = {
 	events: { BattleEvent },
 	dex: BattleDex,
 	rng: Rng,
+	chooseReplacement: ((sideId: number, legal: { number }, state: BattleState) -> number)?,
 }
 
 --[[
@@ -103,6 +125,8 @@ type TurnRun = {
 	would remove the risk that makes switching interesting.
 ]]
 local ACTION_RANK: { [string]: number } = {
+	Run = 4,
+	Item = 3,
 	Switch = 2,
 	Move = 1,
 }
@@ -599,7 +623,7 @@ local function applyDamageEffect(
 	run: TurnRun,
 	moveRun: MoveRun,
 	effect: any,
-	move: Move,
+	move: any,
 	attackerSide: SideState,
 	defenderSide: SideState
 )
@@ -665,7 +689,7 @@ local function applyFixedDamage(
 	run: TurnRun,
 	moveRun: MoveRun,
 	effect: any,
-	move: Move,
+	move: any,
 	attackerSide: SideState,
 	defenderSide: SideState
 )
@@ -824,9 +848,21 @@ end
 	stages are the whole point of the move. Everything else about the outgoing creature
 	is left behind regardless — volatiles surviving a switch would make Taunt permanent.
 ]]
-local function bringIn(run: TurnRun, side: SideState, partyIndex: number, keepStages: boolean?)
+--[[
+	`announceExit` is false when replacing a creature that fainted. The faint is the
+	exit; logging a withdrawal as well reads as two events for one thing happening.
+]]
+local function bringIn(
+	run: TurnRun,
+	side: SideState,
+	partyIndex: number,
+	keepStages: boolean?,
+	announceExit: boolean?
+)
 	local outgoing = activeOf(side)
-	emit(run, { kind = "SwitchOut", sideId = side.id, creatureUid = outgoing.uid })
+	if announceExit ~= false then
+		emit(run, { kind = "SwitchOut", sideId = side.id, creatureUid = outgoing.uid })
+	end
 
 	-- A creature leaving the field releases anything it was holding in place, and
 	-- stops being held itself.
@@ -889,17 +925,68 @@ end
 --[[
 	Pivoting.
 
-	PLACEHOLDER, AND A DELIBERATE ONE: the replacement is picked at random. In a real
-	battle the player chooses, and that choice is what makes a pivot move worth a slot.
-	Engine owns prompting for it; until Engine exists, picking randomly keeps the move
-	honest about withdrawing rather than silently doing nothing.
+	The player chooses the replacement — that choice is most of what makes a pivot move
+	worth a slot. The choice arrives through `chooseReplacement`, and the answer is
+	validated rather than trusted: a controller is the outside world, and the outside
+	world is where a party index of 99 comes from.
+
+	Without a chooser the replacement is drawn from the RNG. That keeps TurnResolver
+	usable on its own, which the effect tests rely on.
 ]]
+local function chooseFrom(run: TurnRun, side: SideState, choices: { number }): number
+	if run.chooseReplacement == nil then
+		return run.rng:pick(choices)
+	end
+
+	local picked = run.chooseReplacement(side.id, choices, run.state)
+	for _, index in choices do
+		if index == picked then
+			return picked
+		end
+	end
+	error(
+		`TurnResolver: chooseReplacement gave {tostring(picked)} for side {side.id}, `
+			.. `which is not one of the legal replacements`
+	)
+end
+
 local function applySelfSwitch(run: TurnRun, effect: any, attackerSide: SideState)
 	local choices = livingReplacements(attackerSide)
 	if #choices == 0 then
 		return
 	end
-	bringIn(run, attackerSide, run.rng:pick(choices), effect.passBoosts == true)
+	bringIn(run, attackerSide, chooseFrom(run, attackerSide, choices), effect.passBoosts == true)
+end
+
+--[[
+	Capture.
+
+	Only from an item, and only against a wild creature — a trainer battle that could be
+	ended with a ball would make every gym optional. A failed attempt still logs, so the
+	UI has something to animate and the player can see the shakes.
+]]
+local function applyCapture(run: TurnRun, effect: any, defenderSide: SideState)
+	if not defenderSide.isWild then
+		emit(run, { kind = "CaptureAttempt", shakes = 0, succeeded = false })
+		return
+	end
+
+	local getCatchRate = run.dex.getCatchRate
+	if getCatchRate == nil then
+		error("TurnResolver: the dex has no getCatchRate, so a Capture effect cannot resolve")
+	end
+
+	local target = activeOf(defenderSide)
+	local result = Capture.attempt({
+		maxHp = run.dex.getStats(target).hp,
+		currentHp = target.currentHp,
+		catchRate = getCatchRate(target),
+		ballMultiplier = effect.ballMultiplier,
+		status = target.status,
+		guaranteed = effect.guaranteed,
+	}, run.rng)
+
+	emit(run, { kind = "CaptureAttempt", shakes = result.shakes, succeeded = result.captured })
 end
 
 local function applyTrap(
@@ -1069,13 +1156,21 @@ local function applyEffect(
 	run: TurnRun,
 	moveRun: MoveRun,
 	effect: MoveEffect,
-	move: Move,
+	-- nil when the effect came from an item rather than a move. The damaging
+	-- primitives need a type and say so instead of guessing one.
+	move: Move?,
 	attackerSide: SideState,
 	defenderSide: SideState
 )
 	if effect.kind == "Damage" then
+		if move == nil then
+			error("TurnResolver: a Damage effect needs a move; items cannot carry one")
+		end
 		applyDamageEffect(run, moveRun, effect, move, attackerSide, defenderSide)
 	elseif effect.kind == "FixedDamage" then
+		if move == nil then
+			error("TurnResolver: a FixedDamage effect needs a move; items cannot carry one")
+		end
 		applyFixedDamage(run, moveRun, effect, move, attackerSide, defenderSide)
 	elseif effect.kind == "Recoil" then
 		applyRecoil(run, moveRun, effect, attackerSide)
@@ -1109,13 +1204,15 @@ local function applyEffect(
 		applySelfSwitch(run, effect, attackerSide)
 	elseif effect.kind == "Trap" then
 		applyTrap(run, effect, attackerSide, defenderSide)
+	elseif effect.kind == "Capture" then
+		applyCapture(run, effect, defenderSide)
 	else
 		error(
 			`TurnResolver: effect "{effect.kind}" is not implemented in this phase. `
 				.. `Implemented: Damage, FixedDamage, Recoil, Drain, Heal, InflictStatus, `
 				.. `StatStage, CureStatus, ResetStatStages, ApplyVolatile, RemoveVolatile, `
 				.. `SetHazard, SetSideCondition, ClearSide, SetField, ForceSwitch, SelfSwitch, `
-				.. `Trap. Capture is handled by the item path.`
+				.. `Trap, Capture. All nineteen primitives are implemented.`
 		)
 	end
 end
@@ -1296,6 +1393,68 @@ local function performMove(run: TurnRun, side: SideState, intent: any)
 	end
 end
 
+--[[ Items and running ---------------------------------------------------- ]]
+
+--[[
+	Items run their effects through exactly the same interpreter moves do. A potion is
+	Heal, a ball is Capture — the item system needs no new dispatch, which is the
+	property that earned Capture a slot in a nineteen-primitive vocabulary.
+]]
+local function performItem(run: TurnRun, side: SideState, intent: any)
+	local getItem = run.dex.getItem
+	if getItem == nil then
+		error("TurnResolver: the dex has no getItem, so an Item intent cannot resolve")
+	end
+
+	local item = getItem(intent.itemId)
+	emit(run, { kind = "ItemUsed", sideId = side.id, itemId = item.id })
+
+	local defenderSide = sideById(run.state, BattleStateModule.opposingSideId(side.id))
+	local moveRun: MoveRun = { damageDealt = 0 }
+	for _, effect in item.effects do
+		applyEffect(run, moveRun, effect, nil, side, defenderSide)
+	end
+end
+
+--[[
+	Fleeing, on the Gen 5 formula.
+
+	    odds = (floor(ourSpeed * 128 / theirSpeed) + 30 * previousAttempts) mod 256
+
+	Outspeeding is a guaranteed escape; otherwise every failed attempt makes the next
+	one likelier, so a slow creature gets out eventually rather than being stuck.
+
+	The attempt count is read back out of the battle log rather than stored, because
+	BattleState has no field for it and inventing one would mean editing a type this
+	module does not own.
+]]
+local function performRun(run: TurnRun, side: SideState)
+	local opposing = sideById(run.state, BattleStateModule.opposingSideId(side.id))
+
+	-- You cannot walk away from a person.
+	if not opposing.isWild then
+		emit(run, { kind = "FleeAttempt", succeeded = false })
+		return
+	end
+
+	local ourSpeed = sideSpeed(run, side)
+	local theirSpeed = sideSpeed(run, opposing)
+	if ourSpeed > theirSpeed then
+		emit(run, { kind = "FleeAttempt", succeeded = true })
+		return
+	end
+
+	local previousAttempts = 0
+	for _, event in run.state.log do
+		if event.kind == "FleeAttempt" then
+			previousAttempts += 1
+		end
+	end
+
+	local odds = (math.floor(ourSpeed * 128 / theirSpeed) + 30 * previousAttempts) % 256
+	emit(run, { kind = "FleeAttempt", succeeded = run.rng:nextInteger(0, 255) < odds })
+end
+
 --[[ End of turn ------------------------------------------------------------ ]]
 
 --[[
@@ -1467,6 +1626,7 @@ local function resolveTurn(
 		events = {},
 		dex = context.dex,
 		rng = context.rng,
+		chooseReplacement = context.chooseReplacement,
 	}
 
 	emit(run, { kind = "TurnBegin", turn = run.state.turn })
@@ -1507,10 +1667,16 @@ local function resolveTurn(
 				performSwitch(run, side, intent)
 			elseif intent.kind == "Move" then
 				performMove(run, side, intent)
+			elseif intent.kind == "Item" then
+				performItem(run, side, intent)
+			elseif intent.kind == "Run" then
+				performRun(run, side)
 			else
+				-- Forfeit ends a battle rather than taking a turn in one, so Engine
+				-- short-circuits it before resolveTurn is ever called.
 				error(
-					`TurnResolver: intent "{intent.kind}" is not implemented in this phase. `
-						.. `Implemented: Move, Switch.`
+					`TurnResolver: intent "{intent.kind}" cannot be resolved as a turn action. `
+						.. `Move, Switch, Item and Run are; Forfeit is Engine's.`
 				)
 			end
 		end
@@ -1529,8 +1695,37 @@ local function resolveTurn(
 	return { state = run.state, events = run.events }
 end
 
+--[[
+	Brings a replacement in outside of a turn, which is what Engine needs after a faint.
+	Reuses bringIn, so a forced replacement clears volatiles, releases traps and pays
+	the hazard toll exactly as any other entry does.
+]]
+local function sendIn(
+	state: BattleState,
+	sideId: number,
+	partyIndex: number,
+	context: TurnContext
+): TurnOutcome
+	local run: TurnRun = {
+		state = deepClone(state),
+		events = {},
+		dex = context.dex,
+		rng = context.rng,
+		chooseReplacement = context.chooseReplacement,
+	}
+
+	bringIn(run, sideById(run.state, sideId), partyIndex, false, false)
+
+	for _, event in run.events do
+		table.insert(run.state.log, event)
+	end
+	return { state = run.state, events = run.events }
+end
+
 return {
 	ACTION_RANK = ACTION_RANK,
+	VOLATILE_BEHAVIOUR = VOLATILE_BEHAVIOUR,
+	sendIn = sendIn,
 	effectiveSpeed = effectiveSpeed,
 	orderActions = orderActions,
 	resolveTurn = resolveTurn,

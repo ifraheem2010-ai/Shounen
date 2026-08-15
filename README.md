@@ -12,19 +12,20 @@ outright, which is why every name in it is a constructed word and why section 9 
 
 ## Status
 
-**Phase 0 complete. Phase 1 (the headless battle engine) is next.**
+**Phase 0 and Phase 1 complete. Phase 2 (the save system) is next.**
 
 | Phase | | |
 |---|---|---|
 | **P0** | Tooling, repo skeleton, type chart, test harness, CI | ✅ done |
-| **P1** | Headless battle engine | ⬜ next |
-| **P2** | Save system (ProfileStore) | ⬜ |
+| **P1** | Headless battle engine | ✅ done — gate passed |
+| **P2** | Save system (ProfileStore) | ⬜ next |
 | **P3** | World — routes, towns, encounters | ⬜ |
 | **P4** | UI (React-lua) | ⬜ |
 | **P5** | Vertical slice | ⬜ |
 
-**The Phase 1 gate is a hard stop:** 200+ tests green *and* a full 6v6 battle
-resolving in the terminal from a fixed seed. No UI work starts before that passes.
+**The Phase 1 gate has passed:** 504 tests green, and a full 6v6 resolves from a fixed
+seed in the terminal. Run it yourself with `lune run gate-6v6` — it prints the complete
+event log and then replays the battle to prove the log is reproducible.
 
 ---
 

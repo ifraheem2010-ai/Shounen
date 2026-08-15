@@ -375,10 +375,14 @@ code track.
 
 **P0 is complete. P1 is next: the headless battle engine.**
 
-### Phase 1 gate — hard stop
+### Phase 1 gate — PASSED
 
-**200+ tests green AND a full 6v6 battle resolving in the terminal from a fixed
-seed.** Do not start UI work before this passes.
+**Required: 200+ tests green AND a full 6v6 battle resolving in the terminal from a
+fixed seed.**
+
+Both met. 504 tests green, and `lune run gate-6v6` resolves a full 6v6 from seed
+12345 in 17 turns and 101 events, then replays it and compares the two logs line
+for line. UI work (P4) is unblocked, but P2 and P3 come first.
 
 Phase 1 scope: 1v1 and 6v6, move/switch/item/run actions, Gen-5 damage formula,
 the 12-type chart, 5 status conditions (Burn, Poison, Paralysis, Sleep, Freeze),

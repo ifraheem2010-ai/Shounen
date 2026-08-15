@@ -133,14 +133,16 @@ end
 	the point is to control the numbers a test sees, not to re-derive them.
 ]]
 export type DexOptions = {
-	species: { [string]: { stats: any, typing: { string } } }?,
+	species: { [string]: { stats: any, typing: { string }, catchRate: number? } }?,
 	moves: { [string]: any }?,
+	items: { [string]: any }?,
 }
 
 local function dex(options: DexOptions?): any
 	local o: any = options or {}
 	local species: { [string]: any } = o.species or {}
 	local moves: { [string]: any } = o.moves or {}
+	local items: { [string]: any } = o.items or {}
 
 	if species["fixture.baseline"] == nil then
 		species["fixture.baseline"] = { stats = statsWith({}), typing = { "Aqua" } }
@@ -167,6 +169,22 @@ local function dex(options: DexOptions?): any
 				error(`SyntheticBattle dex: no species "{target.speciesId}"`)
 			end
 			return entry.typing
+		end,
+		getItem = function(itemId: string): any
+			local item = items[itemId]
+			if item == nil then
+				error(`SyntheticBattle dex: no item "{itemId}"`)
+			end
+			return item
+		end,
+		-- Defaults to 45, the ordinary mid-game rate, so a species only states one when
+		-- the test is about the rate itself.
+		getCatchRate = function(target: any): number
+			local entry = species[target.speciesId]
+			if entry == nil then
+				error(`SyntheticBattle dex: no species "{target.speciesId}"`)
+			end
+			return entry.catchRate or 45
 		end,
 	}
 end

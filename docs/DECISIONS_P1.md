@@ -363,9 +363,19 @@ not exist yet. The alternatives were to make the move silently do nothing — th
 failure the VOLATILE_BEHAVIOUR table exists to prevent — or to invent a pending-choice
 protocol now and rewrite it when Engine lands.
 
-**Reversal.** When Engine can prompt, `applySelfSwitch` stops calling `bringIn` and
-records a pending switch on the turn outcome instead. The tests asserting that the user
-withdraws stay true; only the choice of replacement changes.
+**RESOLVED in Stage 4b.** Engine exists and can prompt. `TurnContext` now carries an
+optional `chooseReplacement`, Engine supplies one that reaches the side's Controller,
+and `applySelfSwitch` uses the answer instead of the RNG. The answer is validated
+against the legal set rather than trusted — a controller is the outside world, and the
+outside world is where a party index of 99 comes from.
+
+The RNG path is still there as the fallback when no chooser is supplied, which is what
+keeps TurnResolver usable on its own in the effect tests. That is a genuine fallback,
+not a leftover: TurnResolver is a pure function and must stay runnable without an
+Engine wrapped around it.
+
+Note that ForceSwitch was NOT changed — see D29. Phazing is supposed to be random,
+because the creature being dragged out does not get a say.
 
 ---
 
@@ -445,5 +455,134 @@ be exercised end to end yet.
 
 **Reversal.** Add `getCatchRate` to BattleDex and dispatch to `Capture.attempt`; the
 maths is done and tested, so it is a handful of lines whenever the item path lands.
+
+---
+## D26 — Forfeit never reaches TurnResolver
+
+**Decision.** Engine checks for a Forfeit intent while collecting actions and ends the
+battle immediately. TurnResolver raises if one ever reaches it.
+
+**Why.** Forfeiting is not a turn action — nothing resolves, the battle simply stops.
+Routing it through the turn machinery would mean inventing a Forfeit event, threading a
+terminal signal back out, and deciding whether a forfeiting player still gets their move
+in first. Checking it up front answers that last question the right way: they do not.
+
+**Reversal.** Move the check into the intent dispatch and add a `Forfeited` event to
+`Types/BattleState.luau` — which is data-architect's file, and is most of why it was not
+done that way.
+
+---
+
+## D27 — A battle that cannot end is a draw at 1000 turns
+
+**Decision.** `Engine.run` stops at `maxTurns` (default 1000) and records a Draw.
+
+**Why.** Two walls with recovery and no way through each other will loop forever. On a
+real server that is not a hung battle, it is a hung thread. A ceiling makes the failure
+visible and bounded instead of fatal.
+
+**Why a draw rather than an error.** A stalemate is a legitimate outcome of a badly
+matched pair, not a bug in the engine. Raising would make a balance problem look like a
+crash.
+
+**This has already earned its keep.** The 6v6 gate test hit the ceiling during
+development because the attacking move ran out of PP one knockout short of a sweep. The
+ceiling turned an infinite loop into a failing assertion with a readable cause.
+
+**Reversal.** `DEFAULT_MAX_TURNS` is one constant, and every caller can override it.
+
+---
+
+## D28 — Terminal outcomes are read out of the event log
+
+**Decision.** Engine decides a capture or an escape ended the battle by scanning the
+turn's events for `CaptureAttempt`/`FleeAttempt` with `succeeded`, rather than having
+TurnResolver return a status.
+
+**Why.** The log is the record of what happened. Reading the decision from it means a
+replay of the log reaches the same conclusion the live battle did, and it keeps
+TurnResolver from needing an opinion about whether the battle is over — which is
+Engine's question, not its own.
+
+**Cost.** A linear scan of one turn's events, which is a handful of entries.
+
+**Reversal.** Return a terminal signal from `resolveTurn`; every caller would need
+updating and the replay property would quietly weaken.
+
+---
+
+## D29 — ForceSwitch stays random; only SelfSwitch got a chooser
+
+**Decision.** D20's fix applies to SelfSwitch alone. Phazing still draws its replacement
+from the RNG.
+
+**Why this is not the same problem.** A pivot move is the *user's* choice, and taking it
+away made the move worse than it should be. Phazing is done TO someone — in Gen 5 the
+dragged-out creature's side does not choose what replaces it, and that unpredictability
+is the entire threat. Letting the victim pick would turn phazing into a free switch for
+the target.
+
+**Reversal.** Route `applyForceSwitch` through `chooseFrom` as well, and phazing becomes
+a much weaker move.
+
+---
+
+## D30 — The flee counter is recomputed from the log rather than stored
+
+**Decision.** Gen 5's escape odds rise with each failed attempt. That count is obtained
+by scanning the battle log for previous `FleeAttempt` events.
+
+**Alternatives.** Add an `escapeAttempts` field to `SideState`, which is the obvious
+design and is what a real implementation would do.
+
+**Why not.** `SideState` lives in `Types/BattleState.luau`, which is data-architect's,
+and it is a persisted shape — adding a field means a `schemaVersion` bump and a
+migration for a counter that lives for the length of one battle.
+
+**Cost.** A scan of the whole log per flee attempt. Fleeing happens at most a handful of
+times in a battle, so this is not a real cost, but it is O(log length) rather than O(1)
+and would want revisiting if anything else needed the same trick.
+
+**Reversal.** Add the field, bump the schema, write the migration.
+
+---
+
+## D31 — Items reuse the move effect interpreter, so `move` became optional
+
+**Decision.** An Item intent runs the item's effects through the same `applyEffect`
+dispatch a move uses, passing `nil` for the move. `Damage` and `FixedDamage` raise if
+they get a nil move.
+
+**Why.** This is the payoff the effect vocabulary was designed for: a potion is `Heal`,
+a ball is `Capture`, and the item system needed zero new interpreter code. It is also
+the concrete argument for having given `Capture` a slot in a nineteen-primitive
+vocabulary back in Phase 0.
+
+**Why raise rather than invent a move.** The damaging primitives need a type for the
+chart, and an item has none. Synthesising a fake typeless move would be inventing data
+to satisfy a signature.
+
+**Reversal.** Give items a synthetic Move and the nil checks disappear, along with the
+guarantee that an item cannot secretly deal typed damage.
+
+---
+
+## D32 — The gate battle uses real moves and synthetic species
+
+**Decision.** `tests/fixtures/GateBattle.luau` builds the Phase 1 demonstration from the
+real `Data/Moves.luau` table and twelve synthetic species.
+
+**Why the split.** Moves are real because they exist and because the gate should
+exercise the actual content path. Species are synthetic because
+`src/shared/Data/Species.luau` does not exist — that is data-architect's and it is
+Phase 2 work. Waiting for it would have meant no gate demonstration at all.
+
+**What it means for the numbers.** The stats and typings in that fixture were chosen to
+produce a readable battle: a speed spread so turn order matters, typings that give the
+chart something to say, HP low enough that six knockouts fit in a scannable log. They
+are NOT balance data and no conclusion about balance should be drawn from that battle.
+
+**Reversal.** Swap the species table for the real one when it lands; the roster, the
+controllers and the seed stay as they are.
 
 ---
