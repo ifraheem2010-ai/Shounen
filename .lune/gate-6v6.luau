@@ -24,6 +24,7 @@ local GATE_SEED = 12345
 local root = shim.mount({ Shared = "src/shared", Tests = "tests" })
 local Engine = shim.import(root, "Shared/Battle/Engine")
 local GateBattle = shim.import(root, "Tests/fixtures/GateBattle")
+local Species = shim.import(root, "Shared/Data/Species")
 
 local function bold(text: string): string
 	return stdio.style("bold") .. text .. stdio.style("reset")
@@ -59,25 +60,23 @@ end
 
 print("")
 print(bold("PHASE 1 GATE — full 6v6 from a fixed seed"))
-print(`seed {GATE_SEED} | real move table | synthetic species (Data/Species.luau does not exist yet)`)
+print(`seed {GATE_SEED} | real move table | real species table | level {GateBattle.GATE_LEVEL}`)
 print("")
 
-print(bold("SIDE 1"))
-for index, entry in GateBattle.ROSTER_ONE do
-	local species = GateBattle.SPECIES[entry.speciesId]
-	print(
-		`  {index}. {entry.uid}  {table.concat(species.typing, "/")}  `
-			.. `hp {species.stats.hp} spe {species.stats.spe}  [{table.concat(entry.moves, ", ")}]`
-	)
+local function printRoster(label: string, roster: { string })
+	print(bold(label))
+	for index, speciesId in roster do
+		local entry = Species.getSpecies(speciesId)
+		local moves = Species.defaultMoveset(speciesId, GateBattle.GATE_LEVEL)
+		print(
+			`  {index}. {entry.name}  {table.concat(entry.typing, "/")}  `
+				.. `{entry.role}  stage {entry.stage}  [{table.concat(moves, ", ")}]`
+		)
+	end
 end
-print(bold("SIDE 2"))
-for index, entry in GateBattle.ROSTER_TWO do
-	local species = GateBattle.SPECIES[entry.speciesId]
-	print(
-		`  {index}. {entry.uid}  {table.concat(species.typing, "/")}  `
-			.. `hp {species.stats.hp} spe {species.stats.spe}  [{table.concat(entry.moves, ", ")}]`
-	)
-end
+
+printRoster("SIDE 1", GateBattle.ROSTER_ONE)
+printRoster("SIDE 2", GateBattle.ROSTER_TWO)
 
 local first = runOnce()
 

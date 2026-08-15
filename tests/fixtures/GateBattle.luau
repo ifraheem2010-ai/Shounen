@@ -1,19 +1,20 @@
 --!strict
 --[[
-	The Phase 1 gate battle.
+	The Phase 1 gate battle, now on real data.
 
-	One 6v6 built from the REAL move table in src/shared/Data/Moves.luau, driven by the
-	real Engine, resolving from a fixed seed. Both the gate demo (.lune/gate-6v6.luau)
-	and the determinism spec build it from here, so the battle printed to a terminal and
-	the battle asserted in the suite are provably the same battle.
+	Real move table, real species table, real stat formula, real engine, fixed seed.
+	Nothing about the creatures in this battle is invented here any more — the roster
+	names species ids and levels, and everything else is looked up.
 
-	SPECIES ARE STILL SYNTHETIC. src/shared/Data/Species.luau does not exist — that is
-	@data-architect's and is Phase 2 work. The stats and typings below were chosen to
-	produce a battle worth reading: a speed spread so turn order matters, typings that
-	give the type chart something to say, and HP low enough that six knockouts fit in a
-	log a person can actually scan.
+	Both the gate demo (.lune/gate-6v6.luau) and the determinism spec build from here,
+	so the battle printed to a terminal and the battle asserted in the suite are
+	provably the same battle.
 
-	Move data is real. Species data is not. Nothing here is balance data.
+	WHAT IS STILL SYNTHETIC: nothing about the creatures. The `Battle.creature`,
+	`Battle.side` and `Battle.state` builders from SyntheticBattle are still used to
+	assemble BattleState, because that is state-shaping rather than content. The engine
+	unit tests keep their synthetic species deliberately, so a balance change to
+	Species.luau cannot turn the engine suite red.
 ]]
 
 local Battle = require(script.Parent.SyntheticBattle)
@@ -21,132 +22,96 @@ local Shared = script.Parent.Parent.Parent.Shared
 local Engine = require(Shared.Battle.Engine)
 local Moves = require(Shared.Data.Moves)
 local RNG = require(Shared.Battle.RNG)
+local Species = require(Shared.Data.Species)
+local StatCalc = require(Shared.Battle.StatCalc)
+
+local GATE_LEVEL = 50
+
+local function perfectIvs(): any
+	return { hp = 31, atk = 31, def = 31, spa = 31, spd = 31, spe = 31 }
+end
+
+local function noEvs(): any
+	return { hp = 0, atk = 0, def = 0, spa = 0, spd = 0, spe = 0 }
+end
 
 --[[
-	Twelve synthetic species. Names are deliberately marked as fixtures so nobody
-	mistakes them for the roster — real names are original constructed words and are
-	@data-architect's to invent.
+	A BattleDex over the real tables.
+
+	`getStats` is where Species finally reaches the engine: base stats plus level plus
+	IVs and EVs through the Gen-5 formula, which is exactly what the dex interface was
+	shaped for back when nothing behind it existed.
+
+	Perfect IVs and no EVs across the board. That keeps the battle about the species
+	rather than about a training spread nobody has designed yet, and it keeps the gate
+	log reproducible without a second source of per-creature variation.
 ]]
-local SPECIES: { [string]: any } = {
-	-- Side one: a fast opener, two attackers, a wall, a pivot, a closer.
-	gate1 = {
-		stats = Battle.statsWith({ hp = 130, spe = 125, atk = 115 }),
-		typing = { "Storm" },
-		catchRate = 45,
-	},
-	gate2 = {
-		stats = Battle.statsWith({ hp = 150, spe = 70, atk = 130 }),
-		typing = { "Feral" },
-		catchRate = 45,
-	},
-	gate3 = {
-		stats = Battle.statsWith({ hp = 140, spe = 95, spa = 120 }),
-		typing = { "Flame" },
-		catchRate = 45,
-	},
-	gate4 = {
-		stats = Battle.statsWith({ hp = 180, spe = 45, def = 135 }),
-		typing = { "Forge" },
-		catchRate = 45,
-	},
-	gate5 = {
-		stats = Battle.statsWith({ hp = 140, spe = 100, atk = 95 }),
-		typing = { "Aqua" },
-		catchRate = 45,
-	},
-	gate6 = {
-		stats = Battle.statsWith({ hp = 135, spe = 110, atk = 110 }),
-		typing = { "Martial" },
-		catchRate = 45,
-	},
+local function realDex(): any
+	return {
+		getMove = Moves.getMove,
+		getStats = function(creature: any): any
+			local entry = Species.getSpecies(creature.speciesId)
+			return StatCalc.compute(entry.baseStats, perfectIvs(), noEvs(), creature.level)
+		end,
+		getTyping = function(creature: any): any
+			return Species.getSpecies(creature.speciesId).typing
+		end,
+		getCatchRate = function(creature: any): number
+			return Species.getSpecies(creature.speciesId).catchRate
+		end,
+		getItem = function(itemId: string): any
+			error(`GateBattle: no item table yet, cannot resolve "{itemId}"`)
+		end,
+	}
+end
 
-	-- Side two: mirrors the shape with different typings, so the chart matters.
-	foe1 = {
-		stats = Battle.statsWith({ hp = 135, spe = 115, spa = 110 }),
-		typing = { "Psyche" },
-		catchRate = 45,
-	},
-	foe2 = {
-		stats = Battle.statsWith({ hp = 155, spe = 65, atk = 125 }),
-		typing = { "Terra" },
-		catchRate = 45,
-	},
-	foe3 = {
-		stats = Battle.statsWith({ hp = 140, spe = 90, spa = 115 }),
-		typing = { "Frost" },
-		catchRate = 45,
-	},
-	foe4 = {
-		stats = Battle.statsWith({ hp = 175, spe = 50, spd = 130 }),
-		typing = { "Spirit" },
-		catchRate = 45,
-	},
-	foe5 = {
-		stats = Battle.statsWith({ hp = 145, spe = 105, spa = 100 }),
-		typing = { "Arcane" },
-		catchRate = 45,
-	},
-	foe6 = {
-		stats = Battle.statsWith({ hp = 130, spe = 120, spa = 105 }),
-		typing = { "Ki" },
-		catchRate = 45,
-	},
-}
+local function creatureFor(speciesId: string, level: number, uid: string?): any
+	local entry = Species.getSpecies(speciesId)
+	local stats = StatCalc.compute(entry.baseStats, perfectIvs(), noEvs(), level)
+	return Battle.creature({
+		uid = uid or entry.name,
+		speciesId = speciesId,
+		level = level,
+		moveIds = Species.defaultMoveset(speciesId, level),
+		currentHp = stats.hp,
+		pp = 16,
+	})
+end
 
 --[[
-	Each creature carries a same-type move plus one utility or coverage move, so the log
-	shows more than six creatures hitting each other with the same attack.
+	Six a side, drawn from the six evolved forms. Stage-1 species are left out: a
+	level-50 Emberlin is a punching bag, and a gate log full of one-sided knockouts
+	demonstrates nothing about the engine.
+
+	The two sides carry the same six species in different orders. That is deliberate —
+	it makes the type chart the thing deciding matchups rather than a stat gap, and it
+	means a divergence between runs cannot be explained away as one side being stronger.
 ]]
 local ROSTER_ONE = {
-	{ uid = "Stormcaller", speciesId = "gate1", moves = { "storm.voltlance", "storm.sweepwind" } },
-	{ uid = "Feralborn", speciesId = "gate2", moves = { "feral.rendclaw", "martial.sunderpalm" } },
-	{ uid = "Emberwright", speciesId = "gate3", moves = { "flame.cinderlash", "ki.innersurge" } },
-	{ uid = "Ironward", speciesId = "gate4", moves = { "forge.pistonram", "forge.replate" } },
-	{ uid = "Tidewalker", speciesId = "gate5", moves = { "aqua.ebbstrike", "aqua.cleansewell" } },
-	{ uid = "Palmbreaker", speciesId = "gate6", moves = { "martial.sunderpalm", "ki.kindlecore" } },
+	"flame.pyrecant",
+	"terra.cragmarrow",
+	"frost.glacivast",
+	"flame.ashvane",
+	"terra.slatewarden",
+	"frost.hoarwen",
 }
 
 local ROSTER_TWO = {
-	{
-		uid = "Mindshear",
-		speciesId = "foe1",
-		moves = { "psyche.mindfracture", "psyche.mindsharpen" },
-	},
-	{ uid = "Stonewake", speciesId = "foe2", moves = { "terra.stoneheave", "forge.scatterbarb" } },
-	{ uid = "Rimecaller", speciesId = "foe3", moves = { "frost.rimeshard", "forge.bulwarkveil" } },
-	{ uid = "Hollowmark", speciesId = "foe4", moves = { "spirit.wraithgrasp", "spirit.soulbind" } },
-	{
-		uid = "Sigilbearer",
-		speciesId = "foe5",
-		moves = { "arcane.sigilbrand", "spirit.hollowcall" },
-	},
-	{ uid = "Corepulse", speciesId = "foe6", moves = { "ki.innersurge", "ki.kindlecore" } },
+	"frost.glacivast",
+	"terra.slatewarden",
+	"flame.pyrecant",
+	"frost.hoarwen",
+	"flame.ashvane",
+	"terra.cragmarrow",
 }
-
-local function buildParty(roster: { any }): { any }
-	local party = {}
-	for _, entry in roster do
-		table.insert(
-			party,
-			Battle.creature({
-				uid = entry.uid,
-				speciesId = entry.speciesId,
-				moveIds = entry.moves,
-				currentHp = SPECIES[entry.speciesId].stats.hp,
-				pp = 16,
-			})
-		)
-	end
-	return party
-end
 
 --[[
 	A deterministic controller: the first move with PP left, and the first living
 	replacement.
 
 	Deliberately not an AI. The gate is about the engine resolving a battle
-	reproducibly, and a controller that made interesting choices would make the log
-	harder to read and the determinism harder to attribute.
+	reproducibly; a controller making interesting choices would make the log harder to
+	read and any divergence harder to attribute.
 ]]
 local function firstUsableController(): any
 	return {
@@ -166,27 +131,70 @@ local function firstUsableController(): any
 	}
 end
 
+local function partyFrom(roster: { string }, level: number, prefix: string): { any }
+	local party = {}
+	for index, speciesId in roster do
+		table.insert(
+			party,
+			creatureFor(speciesId, level, `{prefix}{index}-{Species.getSpecies(speciesId).name}`)
+		)
+	end
+	return party
+end
+
 local function build(seed: number): any
 	local state = Battle.state({
 		seed = seed,
 		sides = {
-			Battle.side({ id = 1, party = buildParty(ROSTER_ONE) }),
-			Battle.side({ id = 2, party = buildParty(ROSTER_TWO) }),
+			Battle.side({ id = 1, party = partyFrom(ROSTER_ONE, GATE_LEVEL, "A") }),
+			Battle.side({ id = 2, party = partyFrom(ROSTER_TWO, GATE_LEVEL, "B") }),
 		},
 	})
 
 	return Engine.create({
 		state = state,
-		dex = Battle.dex({ species = SPECIES, moves = Moves.MOVES, items = {} }),
+		dex = realDex(),
 		rng = RNG.new(seed),
 		controllers = { [1] = firstUsableController(), [2] = firstUsableController() },
 		maxTurns = 200,
 	})
 end
 
+--[[
+	A small head-to-head, for asking whether the type triangle actually shows up in
+	play at a given level rather than only in the chart.
+]]
+export type MatchupOptions = {
+	seed: number,
+	level: number,
+	sideOne: { string },
+	sideTwo: { string },
+}
+
+local function buildMatchup(options: MatchupOptions): any
+	local state = Battle.state({
+		seed = options.seed,
+		sides = {
+			Battle.side({ id = 1, party = partyFrom(options.sideOne, options.level, "A") }),
+			Battle.side({ id = 2, party = partyFrom(options.sideTwo, options.level, "B") }),
+		},
+	})
+
+	return Engine.create({
+		state = state,
+		dex = realDex(),
+		rng = RNG.new(options.seed),
+		controllers = { [1] = firstUsableController(), [2] = firstUsableController() },
+		maxTurns = 200,
+	})
+end
+
 return {
-	SPECIES = SPECIES,
+	GATE_LEVEL = GATE_LEVEL,
 	ROSTER_ONE = ROSTER_ONE,
 	ROSTER_TWO = ROSTER_TWO,
+	realDex = realDex,
+	creatureFor = creatureFor,
 	build = build,
+	buildMatchup = buildMatchup,
 }
