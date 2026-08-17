@@ -41,7 +41,9 @@ everything downstream points at Species, so it lands first or it forces rework.
 | `375968c` | Capture, verified against an external reference |
 | `fd5cdf7` | The three starter lines; the gate swapped onto real species |
 | `134cd49` | Handoff docs |
-| *(uncommitted)* | The three 60-tier starter moves |
+| `4e00114` | The three 60-tier starter moves |
+
+Everything is committed and pushed. The tree was clean at handoff.
 
 **The last session added `flame.emberwake`, `frost.glasswind` and `terra.gravelmaul`** —
 60 power, 100%, no secondary effect. The Flame and Terra lines learn theirs at level 5;
