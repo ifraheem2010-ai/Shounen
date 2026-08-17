@@ -1,6 +1,6 @@
 --!strict
 --[[
-	The reference move set: 21 moves, composed only from the 19 primitives in
+	The reference move set: 24 moves, composed only from the 19 primitives in
 	Types/MoveEffect.luau. No new primitives were added to make any of these work —
 	that constraint is the whole point of the exercise, because the first move that
 	needs a twentieth primitive is the move that proves the vocabulary was wrong.
@@ -23,7 +23,8 @@
 	95 exists only to be slightly better than the one at 90.
 
 	   40 / 100% / +1 priority ...... voltlance
-	   60 / 100% .................... innersurge, ebbstrike
+	   60 / 100% .................... innersurge, ebbstrike,
+	                                  emberwake, glasswind, gravelmaul
 	   75 / 100% .................... sigilbrand, pistonram
 	   90 / 100% .................... sunderpalm, wraithgrasp
 	  110 /  90% .................... mindfracture, stoneheave
@@ -158,6 +159,34 @@ local MOVE_LIST: { Move } = {
 	}),
 
 	--[[
+		THE STARTER BASELINE, one of three.
+
+		The 60 tier is what CLAUDE.md section 6 calls early-game STAB, and until these
+		three landed the starter types had nothing there: the only Flame move was the
+		130 nuke and the only Terra move was the 110 tier, so the Flame and Terra lines
+		carried no same-type move until level 46 and 38. That is what emptied
+		Species.NO_EARLY_STAB.
+
+		They are deliberately plain. No secondary status, no priority, no drawback — a
+		60-power move that also does something is not the 60 tier, it is an undeclared
+		tier between two declared ones, and the whole point of the table is that a
+		player can reason about power by looking at it.
+	]]
+	move({
+		id = "flame.emberwake",
+		name = "Emberwake",
+		typeId = "Flame",
+		category = "Special",
+		accuracy = 1,
+		pp = 25,
+		priority = 0,
+		targeting = "SingleOpponent",
+		makesContact = false,
+		effects = { { kind = "Damage", power = 60, damageClass = "Special" } },
+		description = "A low line of heat pushed out ahead of the user and left burning where it stops.",
+	}),
+
+	--[[
 		The nuke tier. CLAUDE.md allows at most four of these in the entire game and
 		this is the first. The cost is a recharge turn, expressed as the Recharge
 		volatile on the user rather than as a special case in the engine.
@@ -177,6 +206,30 @@ local MOVE_LIST: { Move } = {
 			{ kind = "ApplyVolatile", volatile = "Recharge", target = "Self" },
 		} :: { any },
 		description = "Everything the user has, spent at once. Nothing is left for the next turn.",
+	}),
+
+	--[[
+		The starter baseline, two of three. Frost already had an early-game move in
+		rimeshard; this exists so all three starter types have the same 60-tier floor for
+		the roster to build against.
+
+		NO SPECIES LEARNS THIS, DELIBERATELY. It is not an unfinished job — adding it to
+		the Frost line would replace rimeshard (expected power ~87.5) with a 60 in
+		Glacivast's level-50 set, via defaultMoveset's latest-STAB fallback, and quietly
+		worsen a matchup that is under a hold. Read DECISIONS_P2 P10 before changing this.
+	]]
+	move({
+		id = "frost.glasswind",
+		name = "Glasswind",
+		typeId = "Frost",
+		category = "Special",
+		accuracy = 1,
+		pp = 25,
+		priority = 0,
+		targeting = "SingleOpponent",
+		makesContact = false,
+		effects = { { kind = "Damage", power = 60, damageClass = "Special" } },
+		description = "Air drawn thin and cold enough that crossing it costs something.",
 	}),
 
 	move({
@@ -213,6 +266,22 @@ local MOVE_LIST: { Move } = {
 		makesContact = false,
 		effects = { { kind = "Damage", power = 40, damageClass = "Physical" } },
 		description = "A thrown spear of charge that arrives before the thought behind it.",
+	}),
+
+	-- The starter baseline, three of three. Physical, because the Terra line is a Tank
+	-- built on attack and its endgame move is physical too.
+	move({
+		id = "terra.gravelmaul",
+		name = "Gravelmaul",
+		typeId = "Terra",
+		category = "Physical",
+		accuracy = 1,
+		pp = 25,
+		priority = 0,
+		targeting = "SingleOpponent",
+		makesContact = true,
+		effects = { { kind = "Damage", power = 60, damageClass = "Physical" } },
+		description = "A fistful of loose ground swung with the arm still attached to it.",
 	}),
 
 	move({

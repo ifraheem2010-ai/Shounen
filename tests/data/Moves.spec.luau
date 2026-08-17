@@ -27,10 +27,10 @@ local it = TestKit.it
 local expect = TestKit.expect
 local fail = TestKit.fail
 
-local EXPECTED_MOVE_COUNT = 21
+local EXPECTED_MOVE_COUNT = 24
 
 describe("Moves data / shape", function()
-	it("holds exactly 21 reference moves", function()
+	it("holds exactly 24 reference moves", function()
 		expect(#Moves.MOVE_LIST).toBe(EXPECTED_MOVE_COUNT)
 		expect(#Moves.MOVE_IDS).toBe(EXPECTED_MOVE_COUNT)
 	end)

@@ -403,9 +403,15 @@ Every judgement call made without the owner present is in `docs/DECISIONS_P1.md`
 | `Data/Species.luau` | ✅ 9 species — the three starter lines, three stages each |
 | `Battle/StatCalc.luau` | ✅ Gen-5 stat formula, base stats to battle stats |
 | Gate battle on real data | ✅ real Moves + Species + StatCalc |
+| 60-tier starter moves | ✅ 24 moves; `NO_EARLY_STAB` empty, two triangle edges fixed |
 | Save system (ProfileStore) | ⬜ **not started** — this is what P2 is actually for |
 
-Phase 2 decisions are in `docs/DECISIONS_P2.md` (9 entries).
+Phase 2 decisions are in `docs/DECISIONS_P2.md` (12 entries).
+
+**Natures and abilities are both confirmed to be coming.** The ProfileStore schema
+reserves fields for both when it is built; no content is designed for either yet. Adding
+them post-launch would mean retroactively assigning values to live creature instances — a
+migration that silently changes players' stats. See `DECISIONS_P2.md` P12.
 
 **Species landed before the save system on purpose.** Everything downstream —
 encounters, save data, learnsets, evolution, UI — points at Species, so it lands
@@ -440,14 +446,23 @@ they do, and each is machine-checked or documented so it cannot be forgotten.
   move in the table sets one, so weather never occurs in play.
 - **Item targeting is active-only.** `targetPartyIndex` is accepted and ignored, so a
   potion cannot be used on a benched creature.
-- **No natures.** A second hidden stat layer, deliberately absent. Adding them is a
-  `schemaVersion` bump plus a migration.
-- **No abilities.** Not scoped at all. When they arrive they need the same closed
-  vocabulary treatment the effects got, or the engine starts special-casing again.
-- **Six of nine species have no same-type move before level 10.** The move table holds
-  exactly one move per starter type and two are endgame tiers.
-  `Species.NO_EARLY_STAB` records the exact set; three low-tier moves empty it. This
-  measurably breaks the starter triangle at low level — see `DECISIONS_P2.md` P9.
+- **No natures.** A second hidden stat layer, deliberately absent. **Confirmed to be
+  coming** — the ProfileStore schema reserves the field so the eventual arrival is a
+  backfill rather than a stat-changing migration. No nature table is designed. P12.
+- **No abilities.** Not scoped at all, but **confirmed to be coming** and field-reserved
+  on the same terms. When they arrive they need the same closed vocabulary treatment the
+  effects got, or the engine starts special-casing again. P12.
+- **The starter triangle is inverted on the Frost/Terra edge, at both levels.** 33% at
+  level 15 and 24% at 50 over 200 seeds. The other two edges hold (95% / 64% at 15, 92% /
+  100% at 50) since the 60-tier starter moves landed. This edge is **deliberately parked
+  until the inert volatiles are implemented** — a SpecialWall cannot win a two-max-damage
+  race in an engine that cannot yet express walling. Re-measure with `lune run triangle`
+  after them; if it is still inverted the lever is species-level, not the move table. Full
+  plan and the reason inversion (rather than decay) is the bug: `DECISIONS_P2.md` P11.
+- **`Species.NO_EARLY_STAB` is empty, and the empty table is load-bearing.** It is now an
+  active assertion that every species has same-type coverage by level 10. Do not delete
+  it as dead code — `Species.spec` compares it against reality in both directions, so
+  deleting it lets the next species ship with no early same-type move and nothing notices.
 - **DamageCalc omits Gen 5's 4096 fixed-point modifier chain.** Plain truncating
   multiplication instead, which is what standard Gen-5 calculators do. Can differ by
   one point in stacked-modifier cases.
@@ -457,8 +472,9 @@ they do, and each is machine-checked or documented so it cannot be forgotten.
 - **Story and dialogue** — cheapest to change, easiest to write against a world
   that already exists.
 - **Physics** — not a question. See section 2.
-- **Natures** — a second hidden stat layer nobody has designed yet. Adding them
-  later is a migration; adding them now is an undesigned balance surface.
+- **Natures and abilities** — both will exist and both have reserved schema fields, but
+  neither has designed content. Designing them now is an undesigned balance surface;
+  reserving the field now is what keeps designing them later cheap. P12.
 
 ### The slice
 
@@ -601,6 +617,14 @@ this genre on this platform.
   Gen 7. The constant lives in `Battle/StatusEffects.luau` and is asserted by
   name in its spec, so a silent revert fails the suite. If it is ever revisited,
   that is a balance call and belongs to data-architect.
+- **A learnset edit is not a local edit.** `Species.defaultMoveset` derives a battle-ready
+  set from learn *order*, and its fallback keeps the **latest-learned** same-type move when
+  the last-four rule drops them all. So adding one move to a learnset can silently swap out
+  the same-type move every level-50 instance of that species carries — wild encounters and
+  the triangle harness included — while the file you edited looks fine and the whole suite
+  stays green, because no test asserts a win rate. Check `defaultMoveset(speciesId, 50)`
+  before and after. This is why `frost.glasswind` is in the move table and on nobody's
+  learnset; see `DECISIONS_P2.md` P10.
 - **A previous brief specified the stat-stage ladder as "+2 = 1.5x, -2 = 0.67x".
   That was wrong** — those are the ±1 values. Gen 5 is +1 = 1.5x, +2 = 2.0x,
   -1 = 0.67x, -2 = 0.5x. It was caught because `DamageCalc.spec` already asserted

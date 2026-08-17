@@ -364,18 +364,17 @@ describe("Species data / same-type coverage", function()
 	end)
 
 	--[[
-		THE KNOWN GAP.
+		THE GAP THAT WAS.
 
 		CLAUDE.md section 6 wants a same-type damaging move by level 12; this asserts the
-		stricter level 10. Six of nine species cannot meet it, because Moves.luau holds
-		exactly one move of each starter type and two of them are endgame tiers — the
-		130-power Flame nuke and the 110-power Terra move. Handing either to a level-8
-		starter would make the damage tiers meaningless.
+		stricter level 10. Six of nine species used to fail it, because Moves.luau held
+		exactly one move of each starter type and two were endgame tiers. The 60-tier
+		flame.emberwake and terra.gravelmaul closed it and NO_EARLY_STAB is now empty.
 
-		NO_EARLY_STAB records the exact set. This test asserts that set is exactly right
-		in both directions: a species cannot join it quietly, and a species that gets a
-		low-tier move must be taken off it. Adding a 40 or 60 power Flame and Terra move
-		empties it.
+		The test does not change, and that is deliberate. It asserts the recorded set
+		matches the real one in both directions, so with the record empty it now enforces
+		the level-10 rule outright: a new species without early same-type coverage fails
+		here unless someone writes down why.
 	]]
 	it("has an early-STAB gap on exactly the recorded species", function()
 		local actual: { string } = {}

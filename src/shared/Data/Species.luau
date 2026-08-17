@@ -14,24 +14,20 @@
 	Names are original constructed words. Never a real anime character, never a Pokemon,
 	never a trademarked term — CLAUDE.md section 9 is why this project exists at all.
 
-	THE MOVEPOOL PROBLEM, STATED UP FRONT
-	-------------------------------------
-	Moves.luau contains exactly ONE move of each starter type:
+	THE MOVEPOOL PROBLEM, AND HOW IT WAS CLOSED
+	-------------------------------------------
+	Moves.luau used to contain exactly ONE move of each starter type, at the 130, 25x2-5
+	and 110 tiers. Two of those are endgame tiers, so the Flame and Terra lines carried
+	no same-type move until level 46 and level 38 — a gap in the MOVE TABLE rather than
+	in these species, recorded in NO_EARLY_STAB rather than papered over.
 
-	   flame.cinderlash    130 power, 90%, recharge turn   (the nuke tier)
-	   frost.rimeshard     25 x2-5, 95%                    (the multi-hit tier)
-	   terra.stoneheave    110 power, 90%                  (the high-risk tier)
+	The 60 tier now exists for all three starter types (flame.emberwake, frost.glasswind,
+	terra.gravelmaul) and the Flame and Terra lines learn theirs at level 5. NO_EARLY_STAB
+	is empty and Species.spec now enforces the level-10 rule for real.
 
-	Frost's is a genuine early-game move and its line carries it from level 1. The other
-	two are endgame tiers and cannot be handed to a level-8 starter without making the
-	damage tiers in CLAUDE.md section 6 meaningless.
-
-	So the Flame and Terra lines have NO same-type move until level 46 and level 38.
-	That is a gap in the MOVE TABLE, not in these species, and it is recorded rather
-	than papered over — Species.spec asserts the exact set of species affected so the
-	list cannot grow quietly. The fix is three low-tier moves (a 40 or 60 power Flame,
-	Frost and Terra move each), which is a move-table change and belongs in its own
-	session.
+	The Frost line was left alone. It already had an early-game move in rimeshard, and its
+	learnset is the one thing the level-50 triangle measurement runs through — see
+	DECISIONS_P2 P10.
 ]]
 
 local CreatureInstanceModule = require(script.Parent.Parent.Types.CreatureInstance)
@@ -71,6 +67,7 @@ local FLAME_LINE: { Species } = {
 		growthRate = "MediumSlow",
 		learnset = {
 			{ level = 1, moveId = "ki.innersurge" },
+			{ level = 5, moveId = "flame.emberwake" },
 			{ level = 10, moveId = "psyche.mindsharpen" },
 			{ level = 18, moveId = "arcane.sigilbrand" },
 			{ level = 28, moveId = "psyche.mindfracture" },
@@ -93,6 +90,7 @@ local FLAME_LINE: { Species } = {
 		growthRate = "MediumSlow",
 		learnset = {
 			{ level = 1, moveId = "ki.innersurge" },
+			{ level = 5, moveId = "flame.emberwake" },
 			{ level = 10, moveId = "psyche.mindsharpen" },
 			{ level = 18, moveId = "arcane.sigilbrand" },
 			{ level = 24, moveId = "aqua.ebbstrike" },
@@ -117,6 +115,7 @@ local FLAME_LINE: { Species } = {
 		growthRate = "MediumSlow",
 		learnset = {
 			{ level = 1, moveId = "ki.innersurge" },
+			{ level = 5, moveId = "flame.emberwake" },
 			{ level = 10, moveId = "psyche.mindsharpen" },
 			{ level = 18, moveId = "arcane.sigilbrand" },
 			{ level = 24, moveId = "aqua.ebbstrike" },
@@ -215,6 +214,7 @@ local TERRA_LINE: { Species } = {
 		growthRate = "MediumSlow",
 		learnset = {
 			{ level = 1, moveId = "storm.voltlance" },
+			{ level = 5, moveId = "terra.gravelmaul" },
 			{ level = 14, moveId = "forge.pistonram" },
 			{ level = 24, moveId = "forge.replate" },
 			{ level = 38, moveId = "terra.stoneheave" },
@@ -236,6 +236,7 @@ local TERRA_LINE: { Species } = {
 		growthRate = "MediumSlow",
 		learnset = {
 			{ level = 1, moveId = "storm.voltlance" },
+			{ level = 5, moveId = "terra.gravelmaul" },
 			{ level = 14, moveId = "forge.pistonram" },
 			{ level = 24, moveId = "forge.replate" },
 			{ level = 32, moveId = "martial.sunderpalm" },
@@ -259,6 +260,7 @@ local TERRA_LINE: { Species } = {
 		growthRate = "MediumSlow",
 		learnset = {
 			{ level = 1, moveId = "storm.voltlance" },
+			{ level = 5, moveId = "terra.gravelmaul" },
 			{ level = 14, moveId = "forge.pistonram" },
 			{ level = 24, moveId = "forge.replate" },
 			{ level = 32, moveId = "martial.sunderpalm" },
@@ -303,19 +305,17 @@ local STARTER_LINES: { { string } } = {
 --[[
 	Species with no same-type move before level 10, and why.
 
-	This is not a property of these characters — it is the move table having exactly one
-	move per starter type, at the 130 and 110 tiers. Species.spec asserts this set
-	EXACTLY, so a new species cannot join it silently and a fixed line cannot linger on
-	it. Add a low-tier Flame or Terra move and the corresponding entries come out.
+	EMPTY, and that is the point. It held all six Flame and Terra species while the move
+	table had exactly one move per starter type at the 130 and 110 tiers; the 60-tier
+	moves flame.emberwake and terra.gravelmaul closed it, and both lines now learn their
+	own type at level 5.
+
+	Keep the table rather than deleting it. Species.spec asserts this set EXACTLY in both
+	directions, so an empty table is now an active assertion that every species has
+	same-type coverage by level 10 — delete it and the next species can quietly ship
+	without any. A new entry here is allowed, but it has to be written down with a reason.
 ]]
-local NO_EARLY_STAB: { [string]: string } = {
-	["flame.emberlin"] = "the only Flame move is the 130-power nuke, learned at 46",
-	["flame.ashvane"] = "the only Flame move is the 130-power nuke, learned at 46",
-	["flame.pyrecant"] = "the only Flame move is the 130-power nuke, learned at 46",
-	["terra.cairnling"] = "the only Terra move is the 110-power tier, learned at 38",
-	["terra.slatewarden"] = "the only Terra move is the 110-power tier, learned at 38",
-	["terra.cragmarrow"] = "the only Terra move is the 110-power tier, learned at 38",
-}
+local NO_EARLY_STAB: { [string]: string } = {}
 
 --[[ Lookup ---------------------------------------------------------------- ]]
 

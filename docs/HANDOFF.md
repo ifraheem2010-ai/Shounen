@@ -3,7 +3,7 @@
 Start here after a context reset. This is a pointer file — it does not repeat what is
 already written down elsewhere.
 
-**Last updated:** 2026-08-15, at commit `fd5cdf7`.
+**Last updated:** 2026-08-15, after the 60-tier starter moves.
 
 ---
 
@@ -29,70 +29,84 @@ everything downstream points at Species, so it lands first or it forces rework.
 | `src/shared/Data/Species.luau` | 9 species, the three starter lines, three stages each |
 | `src/shared/Battle/StatCalc.luau` | Gen-5 stat formula; base stats to battle stats |
 | Gate battle | now runs on real Moves + Species + StatCalc |
+| 60-tier starter moves | 24 moves; `NO_EARLY_STAB` empty; two triangle edges fixed |
 
 ---
 
-## What just happened, in three commits
+## What just happened
 
 | Commit | |
 |---|---|
 | `3ec2aa9` | Engine, and the Phase 1 gate passing |
 | `375968c` | Capture, verified against an external reference |
 | `fd5cdf7` | The three starter lines; the gate swapped onto real species |
+| `134cd49` | Handoff docs |
+| *(uncommitted)* | The three 60-tier starter moves |
 
-Everything is committed and pushed. The tree was clean at handoff.
+**The last session added `flame.emberwake`, `frost.glasswind` and `terra.gravelmaul`** —
+60 power, 100%, no secondary effect. The Flame and Terra lines learn theirs at level 5;
+the Frost line's learnsets were deliberately left alone. `NO_EARLY_STAB` is empty and the
+move table is at 24. Reasoning and the full before/after measurement: `DECISIONS_P2.md`
+**P10**.
+
+Triangle after, 200 seeds per edge:
+
+| edge | L15 before | L15 after | L50 |
+|---|---|---|---|
+| Flame beats Frost | 0% | **95%** ✅ | 92% ✅ |
+| Frost beats Terra | 33% | 33% ❌ | 24% ❌ |
+| Terra beats Flame | 0% | **64%** ✅ | 100% ✅ |
+
+Level 50 is unchanged on every edge, which is the proof that leaving Frost alone kept
+that deferred balance question untouched.
 
 ---
 
 ## The immediate next task
 
-**`src/shared/Data/Moves.luau` needs three low-tier starter moves** — roughly 40 or 60
-power, one each of Flame, Frost and Terra.
+**The ProfileStore save system.** This is what P2 is actually named for and it is the last
+thing in the phase. `src/server/Services/` is still empty.
 
-This is the smallest change with the largest effect on what is currently broken. The
-move table holds exactly one move per starter type and two of them are endgame tiers
-(a 130-power Flame nuke, a 110-power Terra move), so:
+Two constraints on it that are already decided, before any design work starts:
 
-- Six of the nine species have no same-type move before level 10.
-- **The starter triangle does not hold at level 15 on any edge** — 0% / 33% / 0% over
-  200 seeds. Flame and Terra never apply the 2x the chart promises, and their filler
-  coverage points somewhere else entirely.
+- **Reserve schema fields for natures and abilities.** Both are confirmed to be coming.
+  Nothing will read them for months. Adding them post-launch instead means retroactively
+  assigning values to live creature instances — a migration that silently changes
+  players' stats. Reserve the field, leave it empty, design no content.
+  → `DECISIONS_P2.md` **P12**
+- Any schema change bumps `schemaVersion` and ships a migration. Absolute rule 7.
 
-`Species.NO_EARLY_STAB` records the exact affected set and `tests/data/Species.spec.luau`
-asserts it in both directions, so adding the moves and emptying that table is a
-self-checking change. Reproduce the measurement with `lune run triangle`.
-
-Full reasoning: `DECISIONS_P2.md` entries **P1** and **P9**.
-
-After that, in rough order: the ProfileStore save system (the thing P2 is actually
-named for), then `Data/Encounters.luau`, then the remaining species.
+After that, in rough order: `Data/Encounters.luau`, then the remaining species.
 
 ---
 
 ## Open questions waiting on the owner
 
-These are balance and scope calls. None were made without you.
-
-1. **The Frost line loses its own triangle edge at level 50** (24% over 200 seeds).
-   Glacivast is a pure wall — 70 special attack, and its only same-type move is 25
-   power — so it cannot cash in a 2x advantage before Cragmarrow's 110-power attack
-   gets through. Three ways out, all of them balance decisions: give the Frost line real
-   offense (which contradicts its SpecialWall role), give Frost a stronger same-type
-   move, or accept the triangle as a starting-hour promise rather than a lifetime one.
-   → `DECISIONS_P2.md` P9
+1. **Roster size for the vertical slice.** CLAUDE.md §7 records two options and an
+   assessment that shipping the slice with 8 types is the better one. Nine species exist,
+   all in three types. Still open — the owner has said they will come back to it.
 
 2. **Ten of the thirteen volatiles are inert.** Only Recharge, Flinch and Taunt do
    anything. Implementing Confusion, Protect, Substitute and the rest is a real chunk of
    work with no deadline attached — worth scheduling deliberately rather than absorbing
    into another session. → `DECISIONS_P1.md` D13, and `tests/battle/VolatileGap.spec.luau`
 
-3. **Roster size for the vertical slice.** CLAUDE.md §7 records two options and an
-   assessment that shipping the slice with 8 types is the better one. Nine species exist,
-   all in three types. That decision now has consequences and has not been confirmed.
+   **This now blocks a second thing:** the Frost/Terra triangle edge is parked behind it.
 
-4. **Natures and abilities are both absent** and both are schema-affecting. Adding
-   either later means a `schemaVersion` bump and a migration; deciding now is cheaper
-   than deciding after the save system exists.
+---
+
+## Decided, so do not reopen
+
+- **The Frost/Terra edge is not a move-table problem and is not to be fixed with data
+  yet.** It stays inverted until the inert volatiles land, because a SpecialWall loses a
+  two-max-damage-AI race by construction — LeechSeed, Substitute, recovery and status
+  pressure *are* the missing volatiles. Re-measure after them, expect a partial
+  improvement rather than a fix (Glacivast has a 70-SpA floor problem that a kit does not
+  erase), and if it is still inverted the lever is **species-level** — spread or role
+  template — not the move table. A triangle that stops mattering by level 50 is fine and
+  genre-normal; one that reverses is a lie to the player who picked Frost to beat Terra.
+  → `DECISIONS_P2.md` **P11**
+- **Natures and abilities both exist and are field-reserved.** → **P12**
 
 ---
 
