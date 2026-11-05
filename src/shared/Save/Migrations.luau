@@ -40,6 +40,7 @@
 	  step failed       a step threw, or returned something that is not a profile
 ]]
 
+local DeepCopy = require(script.Parent.DeepCopy)
 local ProfileSchema = require(script.Parent.ProfileSchema)
 
 type PlayerProfile = ProfileSchema.PlayerProfile
@@ -95,23 +96,6 @@ local function refuse(
 	from: number?
 ): MigrateErr
 	return { ok = false, code = code, reason = reason, from = from }
-end
-
---[[
-	Copies nested tables too. A shallow copy would hand the steps the caller's own
-	inventory and party tables, so a failed migration would still have changed the
-	player's items.
-]]
-local function deepCopy(value: unknown): unknown
-	if type(value) ~= "table" then
-		return value
-	end
-
-	local copy: { [unknown]: unknown } = {}
-	for key, item in value :: { [unknown]: unknown } do
-		copy[key] = deepCopy(item)
-	end
-	return copy
 end
 
 --[[
@@ -194,7 +178,7 @@ local function migrate(raw: unknown, steps: { Step }, targetVersion: number): Mi
 		return { ok = true, profile = source :: any, from = from, to = from, applied = {} }
 	end
 
-	local working = deepCopy(source) :: RawProfile
+	local working = DeepCopy.copy(source) :: RawProfile
 	local applied: { number } = {}
 
 	for _, step in plan do
