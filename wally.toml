@@ -8,10 +8,18 @@ license = "UNLICENSED"
 # Phase 0 ships with zero packages on purpose. The battle engine is pure Luau and
 # the test harness has no external dependencies, so nothing here blocks P1.
 #
-#   P2 adds:  ProfileStore   (session-locked, migration-aware persistence)
 #   P4 adds:  jsdotlua/react + jsdotlua/react-roblox
 #
-# Do not add either before its phase gate passes.
+# Do not add it before its phase gate passes.
+#
+# PROFILESTORE IS NOT HERE AND CANNOT BE. This manifest used to say P2 would add it.
+# It is not on the Wally index under any official scope -- every package named
+# `profilestore` is a third-party fork of MadStudioRoblox/ProfileStore. The save
+# logic in src/shared/Save/ is finished and tested without it, behind an injected
+# `Store` interface, so only the adapter in src/server/Services/ is waiting on a
+# decision about where the library comes from.
+#
+# See docs/DECISIONS_P2.md P13 for the options. Do not resolve it by picking a fork.
 [dependencies]
 
 [dev-dependencies]

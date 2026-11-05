@@ -328,3 +328,243 @@ about for `src/server/` and `src/client/`.
 consequences, which is the cheap direction. That asymmetry is the entire argument.
 
 ---
+## P13 — ProfileStore is not on Wally, and every package claiming to be it is a stranger's fork
+
+**BLOCKED ON THE OWNER.** The pure save layer is finished and tested without it; only the
+thin adapter in `src/server/Services/` needs the library itself.
+
+**The situation.** `CLAUDE.md` section 2 and `wally.toml` both assume ProfileStore arrives
+as a Wally dependency in P2. It cannot. Checked directly against the index rather than
+from memory:
+
+| probe | result |
+|---|---|
+| `UpliftGames/wally-index` → `madstudioroblox/` | 404 — the scope does not exist |
+| same index → `loleris/`, `mad-studio-roblox/` | 404 |
+| `api.wally.run/v1/package-search?query=profilestore` | 9+ hits, **all third-party forks** |
+
+The forks found: `b1ntran`, `sekuriyo-lotus`, `rustyvirtualgit`, `vyon`, `ddashdev`,
+`aspecky`, `buweyy`, `goset33` and others. Several describe themselves as patched for the
+new Luau type solver. The upstream module is distributed as a Roblox library asset and a
+GitHub repo (`MadStudioRoblox/ProfileStore`), not through Wally.
+
+**Why this is not a shrug.** This is the one module in the project whose failure is
+permanent. A bug anywhere else is a bad battle; a bug here is a player's save. Taking an
+unreviewed fork of it from an account with no reputation, pinned by a version string its
+owner can move, is a supply-chain decision and not a dependency choice.
+
+**The options, as they actually stand.**
+
+1. **Vendor upstream at a pinned commit.** Copy the official module into the repo with its
+   licence and the exact commit recorded. Git stays the source of truth, which is already
+   this project's stated principle, and the code is reviewable in-tree. Updates are manual.
+2. **Depend on a third-party fork via Wally.** One line, normal tooling, and a persistence
+   layer maintained by somebody unknown.
+3. **Defer.** The pure layer is done and tested. Leave the adapter unwritten.
+
+**Decision: none taken.** Option 1 is the recommendation, but vendoring means downloading a
+third-party file into the repository, which is the owner's call rather than mine.
+
+**Reversal.** Cheap in every direction — the library sits behind the injected `Store`
+interface in `SaveSession.luau`, so swapping sources touches one file and no tests.
+
+---
+
+## P14 — The save system is split in two, and the test shim is what decided where the line falls
+
+**Decision.** All save logic lives in `src/shared/Save/` — schema, migrations, validation,
+session bookkeeping. `src/server/Services/` gets only the wiring that hands it the real
+ProfileStore and the real `Players` events.
+
+**Why there, specifically.** Absolute Rule 1 bans Roblox API in `src/shared/Battle/` only,
+so a save module could legally have gone anywhere. The deciding constraint was mechanical:
+`.lune/roblox_require.luau` mounts `src/shared` and `tests`, and nothing else. Code under
+`src/server/` cannot be required under Lune at all, so anything put there is permanently
+untestable. That is not a convention anyone has to remember — it is enforced by the
+harness, and it means the line between "logic" and "wiring" is drawn by what can be tested
+rather than by taste.
+
+**What follows from it.** The store is injected, the same way the engine takes its RNG and
+its dex. A fake store can deny a lock, end a session unprompted, or hand back a corrupt
+save — none of which can be provoked against a real DataStore. Every refusal path in the
+load pipeline is tested because of this, and none of them would be otherwise.
+
+**Reversal.** Moving logic into `src/server/` is always possible and always costs its
+tests. The direction worth guarding is the lazy one.
+
+---
+
+## P15 — A reserved field is enforced by a source scan, not by a comment
+
+**The situation.** P12 reserved `nature` and `abilityId` and added a clause: do not let
+"the field exists" drift into "the system exists". Every other part of P12 is a one-time
+act. That clause is a promise about the next six months.
+
+**Decision.** `tests/save/ProfileSchema.spec.luau` scans every file under `src/` for a read
+or write of either field and fails on a hit, with the declaring file excluded. It also
+asserts no `Data/Natures.luau` or `Data/Abilities.luau` exists, because an unused table of
+natures sitting in `Data/` is content however inert it looks.
+
+Implementing either system means deleting the field from that spec's `RESERVED` list — a
+deliberate act, in a diff, with a decision-log entry attached. The test is the mechanism by
+which that cannot happen quietly.
+
+**It already paid for itself.** `ProfileValidate` wanted to range-check both fields while
+validating everything else on a creature. That would have been reading them, and the scan
+would have gone red. Not validating them is correct: there is nothing to validate, because
+nothing writes them.
+
+**Also corrected here.** Two comments became false the moment the fields landed, and saying
+nothing would have left the codebase arguing with itself:
+`Types/CreatureInstance.luau` claimed natures were "deliberately absent", and
+`Battle/StatCalc.luau` claimed there was no field to read.
+
+**Reversal.** Deleting the scan is a one-line change, and it is the exact line a reviewer
+should ask about.
+
+---
+
+## P16 — The storage cap is a product decision; the technical ceiling was measured and is twenty times higher
+
+**The situation.** `MAX_STORAGE_SIZE` had to be some number. A DataStore value is capped at
+4 MB, and exceeding it does not truncate the save — the write fails outright, for whichever
+player has collected the most.
+
+**Decision.** 300, with the arithmetic done rather than guessed. `.lune/profile-size.luau`
+builds a worst-case profile and reports:
+
+```
+  one maximal creature ......... 695 bytes
+  a completely full profile .... 225.7 KB  (5.51% of the limit)
+  headroom ..................... 3870.3 KB
+  limit reached at about ....... 6034 creatures
+```
+
+So 306 creatures is nowhere near the constraint. 300 is a slice-scoped product choice — how
+much boxing the vertical slice wants — and not a technical ceiling.
+`tests/save/ProfileSchema.spec.luau` asserts a full profile stays under half the limit, so
+the fields Phase 3 adds cannot quietly eat the margin.
+
+**Why a measurement script and not just the test.** The test answers yes or no. The useful
+question when adding a field is "how much room is left", and that needs a number.
+
+**Reversal.** Raising the cap is free and needs no migration — the field already holds a
+list. Lowering it is the expensive direction, because it orphans creatures, and
+`ProfileValidate` deliberately will not "repair" an over-full storage: the only way to do
+that is to delete creatures, which it never does.
+
+---
+
+## P17 — The migration runner is injected, owns the version number, and works on a copy
+
+**The situation.** Version 1 is the first format that has ever existed, so `STEPS` is empty.
+A migration framework with nothing to migrate is untested scaffolding, which is the precise
+trap CLAUDE.md warns about for `src/server/`.
+
+**Decision.** The runner takes its step list as an argument.
+`tests/save/Migrations.spec.luau` drives it with synthetic steps, so every branch is
+exercised before a real migration exists — the same injection the engine uses for the RNG
+and the dex, for the same reason. Synthetic steps are also the `tests/fixtures/` argument
+applied again: a real migration landing must not be able to redden the runner's own suite.
+
+**Absolute Rule 7 is now a test.** A five-line test walks `STEPS` and asserts it forms a
+complete path from v1 to `CURRENT_SCHEMA_VERSION`. Bumping the version without writing the
+migration is the mistake a code review misses and that surfaces only when a player with an
+old save logs in. It now goes red immediately.
+
+**Three smaller calls, each a bug avoided.**
+
+- **The runner stamps `schemaVersion`, never the step.** A step whose author forgets would
+  leave a profile that migrates again on every login, re-running a transform that is rarely
+  idempotent.
+- **Steps run against a deep copy.** The input is ProfileStore's live session table. A
+  migration that fails on step three of four must not leave it in a shape no version
+  describes. Deep rather than shallow, because a shallow copy still shares the player's
+  real inventory and party tables.
+- **The path is planned before any of it runs.** Finding the gap halfway through would leave
+  a half-migrated profile.
+
+**The refusal worth naming.** A profile whose version is *higher* than this build's is
+refused, not loaded. That is a staged rollout or a rollback: the save would load perfectly
+and then silently drop every unknown field on the next write. A refused load costs that
+player one session; the silent downgrade costs them the save.
+
+**Reversal.** The runner is pure and its signature does not change when real steps arrive.
+
+---
+
+## P18 — Validation splits fatal from repairable on a mechanical rule, and repair has two invariants
+
+**Decision.** `ProfileValidate` returns two lists rather than a boolean, because a bad save
+is two situations. The rule for sorting them is mechanical, so nobody has to re-derive the
+philosophy when adding a field:
+
+- a wrong **type** is fatal — a string cannot be clamped into a level without inventing a
+  number
+- a wrong **value** of the right type is repairable — there is exactly one correct answer,
+  so clamping is not a guess
+
+A fatal verdict refuses the load. That costs the player a session and keeps the save
+intact, which is the right way round: ProfileStore will not overwrite a profile it never
+released, so a refused load loses nothing, while a guessed repair is written to disk and is
+permanent.
+
+**The two invariants that make unattended repair safe,** both asserted directly:
+
+- **Repair never deletes a creature.** An over-sized party spills into storage. Every clamp
+  here is reversible annoyance; a vanished creature is the thing a player quits over.
+- **Repair is a fixed point.** A repaired profile validates clean on a second pass. Without
+  that, every login repairs the same fields and writes the same lines to the log forever,
+  which is where a real bug would hide.
+
+**The EV-total rule is arbitrary and therefore written down.** Which stat to cut when a
+spread exceeds 510 is genuinely ambiguous, so the rule is deterministic rather than clever:
+walk the stats in canonical order and clamp each so the running total never passes the cap.
+Earlier stats keep what they have.
+
+**One guard is fatal that could have gone either way.** A creature with an empty move list
+cannot take a turn, and there is no correct move to invent — picking one hands the player
+something they never taught it. A refused login beats a battle that errors on turn one.
+
+**Deliberately not checked:** whether a `speciesId` or `moveId` exists. That needs the
+content tables, and a save must stay loadable while content is being edited. A renamed
+species is a content migration, not a corrupt save.
+
+**Reversal.** Severity is per-check and each one is a single line.
+
+---
+
+## P19 — Four calls in the session layer that are about trust, not mechanism
+
+**Decision, in descending order of how much damage the alternative does.**
+
+**Reconcile is never called, and a test asserts it.** ProfileStore's `Reconcile` fills in
+missing template keys. That is exactly the silent save-format change Absolute Rule 7
+forbids — a field appearing with no migration and no record that it did. Migrations are the
+explicit mechanism and they are tested. Reconcile would also paper over the missing fields
+the validator exists to catch, and would make the migration system look unnecessary while
+quietly doing a worse version of its job.
+
+**An owner mismatch is fatal.** A profile whose `ownerUserId` is not the player being loaded
+is refused. This is the worst thing a load can return: a key collision or a mis-keyed write
+would otherwise hand a player someone else's creatures and then save the result under their
+own key, destroying both profiles.
+
+**The session-end callback recognises its own session, not just its player.** `EndSession`
+fires `OnSessionEnd`, so a late callback from a session the player already left would drop
+the profile they are currently using after a rejoin — and from then on every write goes to a
+table nothing saves. Nothing about it looks wrong until the progress is gone.
+
+**The store template carries owner id 0 as its "never saved" sentinel.** ProfileStore needs
+one static template, so it cannot know whose it is. Roblox user ids start at 1, so 0 is
+unambiguous. A test asserts it never survives into a live profile: one that did would mint
+creature uids colliding with every other new player's.
+
+**And one that is only a convention until it is not.** The storage key is `Player_<userId>`,
+asserted by a test. Changing the format orphans every existing save — the old key stays in
+the DataStore and nothing ever looks at it again.
+
+**Reversal.** All four are single-line changes in `SaveSession.luau`, which is why each one
+has a test holding it in place rather than a comment.
+
+---

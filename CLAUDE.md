@@ -87,7 +87,7 @@ C:\Websites\shounen\
 │   ├── BUILD_PLAN.md         phases, gates, sequencing
 │   ├── HANDOFF.md            start here after a context reset
 │   ├── DECISIONS_P1.md       32 engine decisions made without the owner
-│   └── DECISIONS_P2.md       9 content decisions made without the owner
+│   └── DECISIONS_P2.md       19 content + save decisions made without the owner
 ├── src/
 │   ├── shared/
 │   │   ├── Types/            TypeId, StatBlock, Rng, MoveEffect, Move,
@@ -95,18 +95,24 @@ C:\Websites\shounen\
 │   │   │                     BattleIntent
 │   │   ├── Data/             TypeChart, Moves, Species  (Learnsets, Evolutions,
 │   │   │                     Encounters, Dialogue DO NOT EXIST YET)
-│   │   └── Battle/           the headless engine — NO ROBLOX API
-│   │                         RNG, DamageCalc, StatCalc, StatStages,
-│   │                         StatusEffects, TurnResolver, Capture, Engine
+│   │   ├── Battle/           the headless engine — NO ROBLOX API
+│   │   │                     RNG, DamageCalc, StatCalc, StatStages,
+│   │   │                     StatusEffects, TurnResolver, Capture, Engine
+│   │   └── Save/             the save system, store INJECTED — no Roblox API
+│   │                         ProfileSchema, Migrations, ProfileValidate,
+│   │                         SaveSession, DeepCopy
 │   ├── server/
-│   │   └── Services/         EMPTY — no services written yet
+│   │   └── Services/         EMPTY — the ProfileStore adapter goes here.
+│   │                         Blocked: see DECISIONS_P2.md P13
 │   └── client/
 │       ├── Controllers/      EMPTY — P4
 │       └── UI/               EMPTY — P4
 └── tests/
     ├── TestKit.luau          the whole test framework, zero dependencies
     ├── battle/               engine + type chart + source-invariant suites
-    └── data/                 content validation suites
+    ├── data/                 content validation suites
+    ├── save/                 schema, migrations, validation, session
+    └── fixtures/             synthetic data — never balance data
 ```
 
 ### The Lune require shim — why it exists
@@ -359,7 +365,7 @@ code track.
 |---|---|---|
 | **P0** | Tooling, repo skeleton, type chart, test harness, CI | ✅ complete |
 | **P1** | Headless battle engine | ✅ complete, gate passed |
-| **P2** | Content tables, then the save system (ProfileStore) | 🔶 in progress |
+| **P2** | Content tables, then the save system (ProfileStore) | 🔶 in progress — save logic done, wiring blocked on P13 |
 | **P3** | World — routes, towns, encounters | ⬜ |
 | **P4** | UI (React-lua) | ⬜ |
 | **P5** | Vertical slice | ⬜ |
@@ -404,14 +410,30 @@ Every judgement call made without the owner present is in `docs/DECISIONS_P1.md`
 | `Battle/StatCalc.luau` | ✅ Gen-5 stat formula, base stats to battle stats |
 | Gate battle on real data | ✅ real Moves + Species + StatCalc |
 | 60-tier starter moves | ✅ 24 moves; `NO_EARLY_STAB` empty, two triangle edges fixed |
-| Save system (ProfileStore) | ⬜ **not started** — this is what P2 is actually for |
+| `Save/ProfileSchema.luau` | ✅ the persisted shape, the caps, the reserved fields |
+| `Save/Migrations.luau` | ✅ the runner; `STEPS` empty, Rule 7 machine-checked |
+| `Save/ProfileValidate.luau` | ✅ fatal vs repairable, repair never deletes |
+| `Save/SaveSession.luau` | ✅ lock, load pipeline, release — store injected |
+| Save system wiring | 🔴 **blocked** — ProfileStore is not on Wally. See below |
 
-Phase 2 decisions are in `docs/DECISIONS_P2.md` (12 entries).
+Phase 2 decisions are in `docs/DECISIONS_P2.md` (19 entries).
 
-**Natures and abilities are both confirmed to be coming.** The ProfileStore schema
-reserves fields for both when it is built; no content is designed for either yet. Adding
-them post-launch would mean retroactively assigning values to live creature instances — a
-migration that silently changes players' stats. See `DECISIONS_P2.md` P12.
+**The save system is built and tested; only the wiring is outstanding.** All four modules
+live in `src/shared/Save/` with the store injected, which is why every refusal path —
+a lock held on another server, a corrupt save, a session ended underneath us — has a test.
+`src/server/Services/` is still empty and holds nothing but the eventual adapter.
+
+**ProfileStore cannot be added as a Wally dependency.** Section 2 of this file and
+`wally.toml` both assumed it could. It is not on the index under any official scope; every
+Wally package named `profilestore` is a third-party fork. This is the one module whose
+failure is permanent, so the source is the owner's call, not an agent's.
+**→ `DECISIONS_P2.md` P13**, which lays out the three options and the recommendation.
+
+**Natures and abilities are both confirmed to be coming, and the fields are now reserved.**
+`CreatureInstance` carries `nature` and `abilityId`, always nil, read by nothing. No content
+is designed for either. `tests/save/ProfileSchema.spec.luau` scans `src/` and fails if any
+code starts touching them, so "the field exists" cannot drift into "the system exists"
+without a test going red first. See `DECISIONS_P2.md` P12 and P15.
 
 **Species landed before the save system on purpose.** Everything downstream —
 encounters, save data, learnsets, evolution, UI — points at Species, so it lands
@@ -423,7 +445,7 @@ Nothing below exists. Do not assume otherwise from the presence of a type for it
 
 | Area | State |
 |---|---|
-| `src/server/Services/` | **Empty.** No ProfileService, BattleService, EncounterService |
+| `src/server/Services/` | **Empty.** The save logic exists in `src/shared/Save/`, but nothing wires it to ProfileStore or to `Players` yet. No BattleService, no EncounterService |
 | `src/client/` | **Empty.** No UI, no controllers. P4, gated behind P2 and P3 |
 | `Data/Learnsets.luau` | Does not exist — learnsets live inline on each species, fine for 9, not for 150 |
 | `Data/Evolutions.luau` | Does not exist — evolution rules live inline on each species |
