@@ -11,10 +11,18 @@
 	goes to disk through ProfileStore, so a silent field rename is a data loss bug in
 	someone's save, not a refactor.
 
-	NATURES ARE DELIBERATELY ABSENT. They are a second hidden stat modifier layered on
-	top of IVs, and adding them later is a migration; adding them now is a balance
-	surface nobody has designed yet. If they arrive, they arrive as a field here with
-	a version bump.
+	NATURES AND ABILITIES ARE RESERVED FIELDS, NOT IMPLEMENTED SYSTEMS. Both are
+	confirmed to be coming (DECISIONS_P2.md P12). The fields exist from the first
+	version of this schema so that their arrival is a backfill of something that was
+	always absent, rather than a migration that retroactively assigns hidden stats to
+	creatures people have already raised — which would silently change their numbers
+	on next login with no in-game event to explain it.
+
+	Nothing reads either field, no content is designed for either, and
+	tests/save/ProfileSchema.spec.luau fails if any code in src/ starts touching them.
+	That test is how "the field exists" is prevented from drifting into "the system
+	exists". Implementing either means removing it from that spec's RESERVED list on
+	purpose, and saying so in the decision log.
 ]]
 
 local MoveEffectModule = require(script.Parent.MoveEffect)
@@ -51,6 +59,13 @@ export type CreatureInstance = {
 	-- Retained across trades so the origin of a creature is always knowable.
 	originalOwnerUserId: number?,
 	caughtAtUnix: number?,
+
+	--[[
+		RESERVED (P12). Always nil today. See the header: these are fields without
+		systems, and a test enforces that nothing reads them.
+	]]
+	nature: string?,
+	abilityId: string?,
 }
 
 local MIN_LEVEL = 1

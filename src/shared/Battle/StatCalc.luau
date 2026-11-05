@@ -15,10 +15,16 @@
 	numbers it operates on. Putting it beside the species table would mean the UI, the
 	save system and the engine all reaching into Data/ for arithmetic.
 
-	NATURES ARE ABSENT ON PURPOSE. Gen 5 multiplies one stat by 1.1 and another by 0.9
-	after this. CreatureInstance has no nature field, deliberately (see its header), so
-	there is nothing to read. When natures arrive they slot in as a final multiplier
-	here and as a field there, together with a schemaVersion bump.
+	NATURES ARE NOT APPLIED HERE. Gen 5 multiplies one stat by 1.1 and another by 0.9
+	after this step. CreatureInstance now carries a RESERVED field for them (P12), but
+	it is always nil and nothing reads it — reserving the storage was the cheap half,
+	and this arithmetic is the half that does not exist yet.
+
+	When they arrive, they slot in as a final multiplier at the end of this function.
+	That is a behaviour change to a formula the whole game is balanced against, so it
+	gets the same treatment the damage formula got: a test asserting the Gen 5 values
+	before the multiplier is wired in. No schemaVersion bump is needed — the field is
+	already there, which was the entire point of reserving it.
 ]]
 
 local StatBlockModule = require(script.Parent.Parent.Types.StatBlock)
