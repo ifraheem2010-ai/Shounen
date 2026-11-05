@@ -34,6 +34,19 @@ type CreatureInstance = CreatureInstanceModule.CreatureInstance
 ]]
 local CURRENT_SCHEMA_VERSION = 1
 
+--[[
+	The owner id carried by the store template, and by nothing else.
+
+	ProfileStore needs one static template to hand to a player who has never been
+	saved, so the template cannot know whose it is. Roblox user ids start at 1, so 0
+	is a value no real account can have, which makes it an unambiguous "this has
+	never been loaded by anyone" marker. The session layer swaps it for a real
+	profile on first login, and a test asserts it never survives into a live one —
+	a profile left on owner 0 would mint uids that collide with every other new
+	player's.
+]]
+local FRESH_TEMPLATE_OWNER_ID = 0
+
 local MAX_PARTY_SIZE = 6
 local MAX_STORAGE_SIZE = 300
 local MAX_NICKNAME_LENGTH = 20
@@ -125,8 +138,21 @@ local function nextCreatureUid(profile: PlayerProfile): string
 	return `{profile.ownerUserId}:{serial}`
 end
 
+--[[
+	The static template ProfileStore is constructed with.
+
+	Deliberately not a module-level table: the library deep-copies its template, but
+	this is also the value the fake store hands out in tests, and one shared table
+	would make two "new" players the same player.
+]]
+local function storeTemplate(): PlayerProfile
+	return newProfile(FRESH_TEMPLATE_OWNER_ID, 0)
+end
+
 return {
 	CURRENT_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION,
+	FRESH_TEMPLATE_OWNER_ID = FRESH_TEMPLATE_OWNER_ID,
+	storeTemplate = storeTemplate,
 	MAX_PARTY_SIZE = MAX_PARTY_SIZE,
 	MAX_STORAGE_SIZE = MAX_STORAGE_SIZE,
 	MAX_NICKNAME_LENGTH = MAX_NICKNAME_LENGTH,
