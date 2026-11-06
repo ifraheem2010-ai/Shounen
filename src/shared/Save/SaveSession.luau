@@ -67,8 +67,12 @@ export type Deps = {
 	now: () -> number,
 	log: ((Level, string) -> ())?,
 	validateOptions: ProfileValidate.Options?,
-	-- Handed to StartSessionAsync. The real adapter supplies ProfileStore's Cancel
-	-- callback here, so a player who leaves mid-load does not hold the lock.
+	--[[
+		Handed to StartSessionAsync untouched. ProfileStore's params is
+		{Steal: boolean?} and has NO cancel callback — that was ProfileService's
+		API. A player who leaves mid-load is therefore the adapter's problem to
+		notice, not something that can be declared here.
+	]]
 	sessionParams: any?,
 }
 

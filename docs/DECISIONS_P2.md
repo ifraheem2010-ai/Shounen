@@ -330,8 +330,11 @@ consequences, which is the cheap direction. That asymmetry is the entire argumen
 ---
 ## P13 — ProfileStore is not on Wally, and every package claiming to be it is a stranger's fork
 
-**BLOCKED ON THE OWNER.** The pure save layer is finished and tested without it; only the
-thin adapter in `src/server/Services/` needs the library itself.
+**RESOLVED BY P20** — vendored from the official repository at a pinned commit. The
+entry below is kept for the reasoning, not as an open question.
+
+**Was blocked on the owner.** The pure save layer was finished and tested without it; only
+the thin adapter in `src/server/Services/` needed the library itself.
 
 **The situation.** `CLAUDE.md` section 2 and `wally.toml` both assume ProfileStore arrives
 as a Wally dependency in P2. It cannot. Checked directly against the index rather than
@@ -362,8 +365,9 @@ owner can move, is a supply-chain decision and not a dependency choice.
    layer maintained by somebody unknown.
 3. **Defer.** The pure layer is done and tested. Leave the adapter unwritten.
 
-**Decision: none taken.** Option 1 is the recommendation, but vendoring means downloading a
-third-party file into the repository, which is the owner's call rather than mine.
+**Decision: option 1,** taken by the owner. Vendoring means downloading a third-party file
+into the repository, which was theirs to authorise rather than mine. See **P20** for what
+was actually vendored, what the audit found, and the two check-exclusions it required.
 
 **Reversal.** Cheap in every direction — the library sits behind the injected `Store`
 interface in `SaveSession.luau`, so swapping sources touches one file and no tests.
@@ -566,5 +570,91 @@ the DataStore and nothing ever looks at it again.
 
 **Reversal.** All four are single-line changes in `SaveSession.luau`, which is why each one
 has a test holding it in place rather than a comment.
+
+---
+## P20 — ProfileStore vendored at a pinned commit, and the two check-exclusions that came with it
+
+**Resolves P13.** The owner's call: vendor from the official repository, not any Wally
+fork.
+
+**What was vendored.**
+
+| | |
+|---|---|
+| source | <https://github.com/MadStudioRoblox/ProfileStore> |
+| commit | `45c9847cbcf1fc260369c50eb335aba7c35aecdd` (2025-07-31) |
+| `sha256` | `ad43737203688b8e88cab34ebe8c483000c157e53bfb41e35f1b49ee89d0c95f` |
+| licence | **Apache 2.0**, not MIT — retained at `vendor/LICENSE` |
+| size | 2242 lines |
+
+**There is no release to pin to.** The repository publishes no tags and no releases, so
+"the latest release commit" is the default-branch tip at the time of vendoring. That is
+worth knowing before anyone goes looking for a version number: there isn't one, and a
+future update is a commit-to-commit diff rather than a changelog read.
+
+**The file was audited before it went in,** which is the point of vendoring over
+depending:
+
+- No `HttpService` requests, no `loadstring`, no `getfenv`, no `require` of a marketplace
+  asset id, no escaped-byte obfuscation.
+- `HttpService` appears once, for `GenerateGUID`, to mint session ids.
+- The four services it uses are `DataStoreService`, `MessagingService`, `RunService` and
+  `HttpService` — exactly what session-locked persistence needs and nothing more.
+
+**One modification: a 33-line provenance header.** Apache 2.0 requires stating changes, so
+the header states that it is the only one. `vendor/README.md` carries the command that
+proves the rest is byte-identical: `tail -n +34 vendor/ProfileStore.luau | sha256sum`.
+
+**Three upstream behaviours the adapter had to be written around,** all found by reading
+the source rather than the docs, and all recorded in `DataService.luau` so the next update
+can re-check them:
+
+1. **`StartSessionAsync` throws** rather than returning nil when the key is already live on
+   this server (`ProfileStore.luau:1390`). `ActiveSessionCheck` is cleared only after the
+   asynchronous release finishes, so a player who leaves and rejoins the same server fast
+   enough hits it. The adapter converts that throw into the nil `SaveSession` already reads
+   as `lock-unavailable`; without it, the error escapes a `PlayerAdded` handler and the
+   player sits in the game with no profile and nothing watching.
+2. **`params` is `{Steal: boolean?}` and there is no cancel callback.** That was
+   ProfileService's API. `SaveSession`'s own comment claimed otherwise and has been
+   corrected. The "player left while the load was yielding" case therefore has to be
+   checked by hand in `onPlayerAdded`.
+3. **`EndSession` is asynchronous** — it `task.spawn`s the final save
+   (`ProfileStore.luau:1090`), so the session is not released when the call returns and
+   `OnSessionEnd` fires later. The test fake fires it synchronously, which is stricter than
+   reality and therefore safe.
+
+**`Reconcile` is still never called** (P19), and reading the source confirms why it would
+be wrong: `Profile:Reconcile()` is `ReconcileTable(self.Data, self.ProfileStore.template)`,
+which is precisely the undocumented field injection Absolute Rule 7 forbids.
+
+**Two exclusions, both load-bearing, both now in CI.**
+
+- **`--ignore="vendor/**"`.** The adapter requires ProfileStore, so `luau-lsp` follows the
+  require and reports **36 type errors inside the vendored module** — unknown `task`,
+  incompatible internal table types, `false` compared with `true`. None of them are ours
+  and none are fixable without editing upstream.
+- **`--definitions=globalTypes.d.luau`.** `src/server/` is the first code in this project
+  to use the Roblox API at all, so `task`, `warn` and `Player` had no definitions and
+  produced **10 errors**. The `luau-lsp analyze` warning about missing definitions had
+  been printing harmlessly for the whole project until now.
+
+Both together give 0. The file is downloaded in CI rather than committed: it is an 880 KB
+generated mirror of Roblox's API dump, and pinning it would mean shipping something stale
+within the week. The cost is that CI now depends on one more URL.
+
+`vendor/` is also out of StyLua's reach (`.styluaignore`) and out of Absolute Rule 3's
+scan, which it already was by sitting outside `src/`. That accident is now an assertion:
+`tests/battle/Purity.spec.luau` fails if `vendor` is added to `STRICT_DIRS`, if the
+directory is moved under `src/`, or if `.styluaignore` stops covering it. `vendor/.luaurc`
+sets `nonstrict` with lints off, so the exemption holds for editors too.
+
+**This is the only directory in the repo where "do not apply our standards" is correct,
+and the only one where a nonstrict file is allowed.**
+
+**Reversal.** Deleting `vendor/` and taking a Wally fork is a one-line change to
+`wally.toml` plus one require in `DataService.luau` — the library sits behind
+`SaveSession.Store`, so no test moves. Going the other way, to a newer upstream commit, is
+the procedure in `vendor/README.md`, and step 5 is re-checking the three behaviours above.
 
 ---

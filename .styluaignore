@@ -1,0 +1,4 @@
+# Third-party code, pinned to an upstream commit and never edited.
+# Reformatting it to our taste would make every future upstream diff unreadable.
+# See vendor/README.md and docs/DECISIONS_P2.md P13.
+vendor/

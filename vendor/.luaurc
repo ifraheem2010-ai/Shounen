@@ -1,0 +1,8 @@
+{
+	"languageMode": "nonstrict",
+	"lintErrors": false,
+	"lint": {
+		"*": false
+	},
+	"globals": ["script"]
+}

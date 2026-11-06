@@ -198,6 +198,58 @@ end)
 
 --[[ Rule #3 ---------------------------------------------------------------- ]]
 
+describe("Rule #3 / vendored code is excluded on purpose, not by accident", function()
+	--[[
+		vendor/ holds third-party code pinned to an upstream commit. It is nonstrict
+		and formatted to upstream's taste, and it must stay out of the scan above:
+		running our standards over 2242 lines of someone else's module produces noise
+		we would then be tempted to "fix", and every fix makes the next upstream diff
+		less readable.
+
+		This is the only directory in the repo where a nonstrict file is allowed, so
+		the exclusion is asserted rather than left to whoever edits STRICT_DIRS next.
+		-> vendor/README.md, docs/DECISIONS_P2.md P13
+	]]
+	local VENDOR_DIR = "vendor"
+
+	it("has a vendor directory holding the pinned ProfileStore", function()
+		expect(fs.isDir(VENDOR_DIR)).toBe(true)
+		expect(fs.isFile(`{VENDOR_DIR}/ProfileStore.luau`)).toBe(true)
+		-- Apache 2.0 requires the licence travel with the code.
+		expect(fs.isFile(`{VENDOR_DIR}/LICENSE`)).toBe(true)
+	end)
+
+	it("is not in STRICT_DIRS", function()
+		for _, dir in STRICT_DIRS do
+			if dir == VENDOR_DIR then
+				fail(
+					"vendor/ was added to STRICT_DIRS. Third-party code does not get our "
+						.. "strict-mode rule — see vendor/README.md. Remove it, or delete this "
+						.. "test on purpose and say why in the decision log."
+				)
+			end
+		end
+		expect(#STRICT_DIRS).toBe(3)
+	end)
+
+	it("is not reachable from the directories that ARE scanned", function()
+		-- The exclusion works because vendor/ sits outside src/. If someone moves it
+		-- under src/ to tidy the tree, the scan silently starts covering it and this
+		-- says so instead.
+		expect(fs.isDir("src/vendor")).toBe(false)
+		expect(fs.isDir("src/shared/vendor")).toBe(false)
+		expect(fs.isDir("src/server/vendor")).toBe(false)
+	end)
+
+	it("keeps StyLua off it too", function()
+		expect(fs.isFile(".styluaignore")).toBe(true)
+		local ignored = fs.readFile(".styluaignore")
+		if ignored:match("vendor") == nil then
+			fail(".styluaignore no longer excludes vendor/, so `stylua --check .` will fail on it")
+		end
+	end)
+end)
+
 describe("Rule #3 / --!strict everywhere", function()
 	local sourceFiles: { string } = {}
 	for _, dir in STRICT_DIRS do

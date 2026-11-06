@@ -18,6 +18,11 @@
 /build/
 *.log
 
+# Roblox API type definitions for luau-lsp. An 880 KB generated mirror of Roblox's
+# API dump, downloaded by CI before the type-check step. Not committed: pinning it
+# would mean shipping a file that goes stale the week after, and it is not ours.
+/globalTypes.d.luau
+
 # Editor
 .vscode/
 .idea/

@@ -44,8 +44,27 @@ jobs:
       - name: Generate sourcemap
         run: rojo sourcemap default.project.json --output sourcemap.json
 
+      # Needed from the moment src/server existed: the adapter uses `task`, `warn`
+      # and `Player`, and without the Roblox API definitions luau-lsp reports every
+      # one of them as an unknown global. Downloaded rather than committed because
+      # it is an 880 KB generated mirror of Roblox's API dump — pinning it would
+      # mean shipping a file that is stale the week after.
+      - name: Fetch Roblox type definitions
+        run: >
+          curl -fsSL -o globalTypes.d.luau
+          https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts/globalTypes.d.luau
+
       # src/ only. tests/ and .lune/ require Lune builtins and the shim's instance
       # tree, neither of which luau-lsp can resolve — analysing them reports nothing
       # but unresolvable requires. They are covered by actually running them.
+      #
+      # --ignore skips vendor/. The adapter requires ProfileStore, so luau-lsp
+      # follows the require and would otherwise report 36 type errors inside
+      # somebody else's nonstrict module. Both flags are load-bearing: without the
+      # definitions this reports 10 errors, without the ignore it reports 36.
       - name: Type-check
-        run: luau-lsp analyze --sourcemap=sourcemap.json src
+        run: >
+          luau-lsp analyze --sourcemap=sourcemap.json
+          --definitions=globalTypes.d.luau
+          --ignore="vendor/**"
+          src

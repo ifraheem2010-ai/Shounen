@@ -41,8 +41,9 @@ Rules 1 and 3 are enforced automatically by `tests/battle/Purity.spec.luau`.
 | Sync | **Rojo** | Git + VS Code as the source of truth, **not** Studio. Studio is a viewer/playtester only. |
 | Toolchain | **Rokit** | `rokit.toml` pins every tool; CI installs the same versions. |
 | Language | **Luau**, strict mode | `.luaurc` enforces `languageMode: strict` |
-| Packages | **Wally** | ProfileStore added in P2, React added in P4 |
-| Persistence | **ProfileStore** | Session-locked, migration-aware |
+| Packages | **Wally** | React added in P4. **Not** ProfileStore — see below |
+| Persistence | **ProfileStore** | Session-locked, migration-aware. **Vendored** at `vendor/ProfileStore.luau`, pinned to commit `45c9847`, because it is not on the Wally index under any official scope. → `DECISIONS_P2.md` P13, P20 |
+| Third-party code | **`vendor/`** | Pinned, never edited, excluded from strict/format/analyze. `vendor/README.md` has the verification command |
 | UI | **React-lua** (`jsdotlua/react`, `react-roblox`) | P4 only. Do not start before the P1 gate passes. |
 | Battle engine | **Headless pure Luau** | Zero Roblox API, runs under Lune |
 | Test runner | **Lune** + minimal in-repo harness | Zero external test deps |
@@ -58,9 +59,34 @@ battles are state machines. There is no physics work in this project.
 rokit install                      # once, installs the pinned toolchain
 lune run run-tests                 # the whole suite
 lune run run-tests -- --filter data
-stylua .                           # format
+stylua .                           # format (skips vendor/, see .styluaignore)
 rojo serve                         # live-sync into Studio
+lune run gate-6v6                  # the Phase 1 gate: a full 6v6, twice, compared
+lune run profile-size              # how close a full save is to the 4 MB limit
+lune run triangle                  # starter-triangle win rates
 ```
+
+Type-checking needs two things that are easy to leave off, and leaving them off
+reports dozens of errors that are not yours:
+
+```bash
+DEFS=https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts
+curl -fsSL -o globalTypes.d.luau "$DEFS/globalTypes.d.luau"
+
+rojo sourcemap default.project.json --output sourcemap.json
+
+luau-lsp analyze \
+    --sourcemap=sourcemap.json \
+    --definitions=globalTypes.d.luau \
+    --ignore="vendor/**" \
+    src
+```
+
+`--definitions` is required because `src/server/` uses `task`, `warn` and `Player`;
+without it every Roblox global reads as unknown. `--ignore` skips the vendored
+ProfileStore, which the adapter requires and which is somebody else's nonstrict code.
+Without the definitions that command reports 10 errors; without the ignore, 36. CI
+runs exactly this.
 
 ---
 
@@ -74,6 +100,7 @@ C:\Websites\shounen\
 ├── wally.toml                package manifest
 ├── stylua.toml               formatter config
 ├── .gitignore
+├── .styluaignore             keeps StyLua off vendor/
 ├── CLAUDE.md                 this file — global context for every agent
 ├── README.md                 human-facing status + phase checklist
 ├── .claude/
@@ -86,8 +113,9 @@ C:\Websites\shounen\
 │   ├── TYPES.md              the type bible — read before ANY chart edit
 │   ├── BUILD_PLAN.md         phases, gates, sequencing
 │   ├── HANDOFF.md            start here after a context reset
+│   ├── STUDIO_CHECKS.md      manual save-system pass — the only test DataService gets
 │   ├── DECISIONS_P1.md       32 engine decisions made without the owner
-│   └── DECISIONS_P2.md       19 content + save decisions made without the owner
+│   └── DECISIONS_P2.md       20 content + save decisions made without the owner
 ├── src/
 │   ├── shared/
 │   │   ├── Types/            TypeId, StatBlock, Rng, MoveEffect, Move,
@@ -102,11 +130,17 @@ C:\Websites\shounen\
 │   │                         ProfileSchema, Migrations, ProfileValidate,
 │   │                         SaveSession, DeepCopy
 │   ├── server/
-│   │   └── Services/         EMPTY — the ProfileStore adapter goes here.
-│   │                         Blocked: see DECISIONS_P2.md P13
+│   │   ├── Bootstrap.server.luau  the entry point — a Script, not a module
+│   │   └── Services/         DataService — the ProfileStore adapter.
+│   │                         THE ONLY UNTESTABLE CODE IN THE SAVE PATH
 │   └── client/
 │       ├── Controllers/      EMPTY — P4
 │       └── UI/               EMPTY — P4
+├── vendor/                   THIRD-PARTY, PINNED, NEVER EDITED
+│   ├── ProfileStore.luau     upstream commit 45c9847, Apache 2.0
+│   ├── LICENSE               upstream licence, kept per Apache 2.0
+│   ├── .luaurc               nonstrict, lints off — overrides the root one
+│   └── README.md             provenance, verification, how to update
 └── tests/
     ├── TestKit.luau          the whole test framework, zero dependencies
     ├── battle/               engine + type chart + source-invariant suites
@@ -365,7 +399,7 @@ code track.
 |---|---|---|
 | **P0** | Tooling, repo skeleton, type chart, test harness, CI | ✅ complete |
 | **P1** | Headless battle engine | ✅ complete, gate passed |
-| **P2** | Content tables, then the save system (ProfileStore) | 🔶 in progress — save logic done, wiring blocked on P13 |
+| **P2** | Content tables, then the save system (ProfileStore) | 🔶 in progress — save system complete; roster and encounters outstanding |
 | **P3** | World — routes, towns, encounters | ⬜ |
 | **P4** | UI (React-lua) | ⬜ |
 | **P5** | Vertical slice | ⬜ |
@@ -414,20 +448,26 @@ Every judgement call made without the owner present is in `docs/DECISIONS_P1.md`
 | `Save/Migrations.luau` | ✅ the runner; `STEPS` empty, Rule 7 machine-checked |
 | `Save/ProfileValidate.luau` | ✅ fatal vs repairable, repair never deletes |
 | `Save/SaveSession.luau` | ✅ lock, load pipeline, release — store injected |
-| Save system wiring | 🔴 **blocked** — ProfileStore is not on Wally. See below |
+| `vendor/ProfileStore.luau` | ✅ vendored upstream at commit `45c9847`, Apache 2.0 |
+| `Services/DataService.luau` | ✅ the adapter — the only untestable file in the save path |
+| `Bootstrap.server.luau` | ✅ the server entry point; starts DataService |
 
-Phase 2 decisions are in `docs/DECISIONS_P2.md` (19 entries).
+Phase 2 decisions are in `docs/DECISIONS_P2.md` (20 entries).
 
-**The save system is built and tested; only the wiring is outstanding.** All four modules
-live in `src/shared/Save/` with the store injected, which is why every refusal path —
-a lock held on another server, a corrupt save, a session ended underneath us — has a test.
-`src/server/Services/` is still empty and holds nothing but the eventual adapter.
+**The save system is complete and wired.** All the logic lives in `src/shared/Save/` with
+the store injected, which is why every refusal path — a lock held on another server, a
+corrupt save, a session ended underneath us — has a test. `DataService` is the only file in
+the save path that no test covers, and it is deliberately short for that reason.
 
-**ProfileStore cannot be added as a Wally dependency.** Section 2 of this file and
-`wally.toml` both assumed it could. It is not on the index under any official scope; every
-Wally package named `profilestore` is a third-party fork. This is the one module whose
-failure is permanent, so the source is the owner's call, not an agent's.
-**→ `DECISIONS_P2.md` P13**, which lays out the three options and the recommendation.
+**ProfileStore is vendored, not a Wally dependency.** It is not on the index under any
+official scope; every Wally package named `profilestore` is a third-party fork. This is the
+one module whose failure is permanent, so it is pinned in `vendor/` at commit `45c9847`
+where it can be read and diffed. **→ `DECISIONS_P2.md` P13 and P20.**
+
+**`vendor/` is exempt from this repo's checks, and only `vendor/`.** It is the single place
+a nonstrict file is allowed. `tests/battle/Purity.spec.luau` asserts the exemption rather
+than leaving it to whoever edits `STRICT_DIRS` next. The type-check needs
+`--definitions` and `--ignore="vendor/**"` — see section 2's commands.
 
 **Natures and abilities are both confirmed to be coming, and the fields are now reserved.**
 `CreatureInstance` carries `nature` and `abilityId`, always nil, read by nothing. No content
@@ -445,7 +485,7 @@ Nothing below exists. Do not assume otherwise from the presence of a type for it
 
 | Area | State |
 |---|---|
-| `src/server/Services/` | **Empty.** The save logic exists in `src/shared/Save/`, but nothing wires it to ProfileStore or to `Players` yet. No BattleService, no EncounterService |
+| `src/server/Services/` | Holds `DataService` only. No BattleService, no EncounterService, no remotes — nothing a client can talk to yet |
 | `src/client/` | **Empty.** No UI, no controllers. P4, gated behind P2 and P3 |
 | `Data/Learnsets.luau` | Does not exist — learnsets live inline on each species, fine for 9, not for 150 |
 | `Data/Evolutions.luau` | Does not exist — evolution rules live inline on each species |

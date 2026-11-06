@@ -3,13 +3,13 @@
 Start here after a context reset. This is a pointer file — it does not repeat what is
 already written down elsewhere.
 
-**Last updated:** 2026-11-05, after the save system.
+**Last updated:** 2026-11-05, after the save system was wired to ProfileStore.
 
 ---
 
 ## Where things stand
 
-**661 tests green, 0 failed. 0 type diagnostics in `src`. Format clean.**
+**665 tests green, 0 failed. 0 type diagnostics in `src`. Format clean.**
 
 ```bash
 cd C:\Websites\shounen
@@ -21,7 +21,8 @@ lune run run-tests
 primitives execute, `Engine` drives the turn loop, and `lune run gate-6v6` resolves a
 full 6v6 from a fixed seed and then replays it to prove the log is byte-identical.
 
-**Phase 2 is nearly done, with one thing blocked on you.**
+**Phase 2's save system is complete, wired and running.** What is left in the phase is
+content: the rest of the roster, and encounters.
 
 | Done this phase | |
 |---|---|
@@ -33,35 +34,31 @@ full 6v6 from a fixed seed and then replays it to prove the log is byte-identica
 | `Save/Migrations.luau` | the runner; `STEPS` empty; Absolute Rule 7 machine-checked |
 | `Save/ProfileValidate.luau` | fatal vs repairable; repair never deletes a creature |
 | `Save/SaveSession.luau` | lock, load pipeline, release — the store is injected |
+| `vendor/ProfileStore.luau` | upstream commit `45c9847`, Apache 2.0, audited, never edited |
+| `Services/DataService.luau` | the adapter — the only untestable file in the save path |
+| `Bootstrap.server.luau` | the server entry point |
 
 ---
 
-## The one thing waiting on you
+## What to pick up next
 
-**ProfileStore cannot be a Wally dependency, and the replacement is your call.**
+**`Data/Encounters.luau`**, then the remaining species. Nothing is blocked.
 
-`CLAUDE.md` section 2 and `wally.toml` both assumed it could be. Checked against the
-index directly: there is no official scope, and every Wally package named `profilestore`
-is a third-party fork of `MadStudioRoblox/ProfileStore`. This is the one module in the
-project whose failure is permanent — a bug anywhere else is a bad battle, a bug here is
-somebody's save — so taking an unreviewed fork from an unknown account is a supply-chain
-decision rather than a dependency choice.
+The save system is finished. ProfileStore is vendored at `vendor/ProfileStore.luau`,
+pinned to commit `45c9847`, because it is not on the Wally index under any official scope
+— every package there named `profilestore` is a third-party fork. `DataService` wires it
+to `SaveSession` and `Bootstrap.server.luau` starts it.
 
-Three options, with the full argument in **`DECISIONS_P2.md` P13**:
+**Before trusting it in a real place, run `docs/STUDIO_CHECKS.md`.** `DataService` is the
+only file in the save path no test covers — by design, since `src/server/` cannot be
+required under Lune — so a manual pass in Studio is the only thing that exercises it.
+Six checks, about ten minutes, and it needs API services enabled.
 
-1. **Vendor upstream at a pinned commit** — recommended. Git stays the source of truth,
-   the code is reviewable in-tree, updates are manual.
-2. **Depend on a third-party fork via Wally** — one line, unknown maintainer.
-3. **Defer** — the pure layer is done and tested; leave the adapter unwritten.
-
-**Nothing else is blocked by it.** All the save logic lives in `src/shared/Save/` behind
-an injected `Store` interface, which is why a fake store can deny a lock, end a session
-unprompted or hand back a corrupt save, and every one of those paths has a test. What is
-missing is the adapter in `src/server/Services/` that passes in the real ProfileStore and
-the real `Players` events — a thin piece of wiring, and the only part that cannot be
-tested under Lune at all.
-
-After that, in rough order: `Data/Encounters.luau`, then the remaining species.
+**If you update the vendored module,** follow `vendor/README.md` and do not skip step 5.
+The adapter depends on three specific upstream behaviours, all recorded in its header:
+`StartSessionAsync` throws rather than returning nil when the key is already live on this
+server, `params` is `{Steal: boolean?}` with no cancel callback, and `EndSession` is
+asynchronous.
 
 ---
 
@@ -78,7 +75,7 @@ After that, in rough order: `Data/Encounters.luau`, then the remaining species.
 
    **This still blocks a second thing:** the Frost/Terra triangle edge is parked behind it.
 
-3. **Where ProfileStore comes from.** See above.
+ProfileStore's source is no longer among these — see `DECISIONS_P2.md` P13 and P20.
 
 ---
 
@@ -142,3 +139,10 @@ with rather than rediscovered.
   thing exists.
 - `lune run profile-size` prints how close a full save is to the 4 MB DataStore limit.
   Run it after adding a field to the profile; the answer today is 5.51%.
+- **The type-check needs two flags or it lies to you.** `luau-lsp analyze src` on its own
+  reports 46 errors that are not yours: 36 inside the vendored ProfileStore, and 10
+  Roblox globals with no definitions loaded. Section 2 of CLAUDE.md has the real command,
+  and CI runs exactly it.
+- **`vendor/` is the only place a nonstrict file is allowed,** and the only directory
+  exempt from format and strict checks. `tests/battle/Purity.spec.luau` asserts the
+  exemption, so moving it under `src/` or editing `STRICT_DIRS` goes red.
