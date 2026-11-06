@@ -66,6 +66,20 @@ export type Deps = {
 	-- the real clock cannot be replayed.
 	now: () -> number,
 	log: ((Level, string) -> ())?,
+
+	--[[
+		Called when the store ends a session this service still held — which means
+		another server took it. Not called when we release it ourselves.
+
+		Dropping the profile is not enough on its own: the player is still in the
+		game, and from that moment nothing they do will ever be saved. Whoever owns
+		the player has to be told so they can remove them. ProfileStore's waiting
+		server steals after 40 seconds (SESSION_STEAL in vendor/ProfileStore.luau),
+		so this is not a rare race — it is what happens every time somebody opens the
+		same place twice.
+	]]
+	onSessionLost: ((userId: number) -> ())?,
+
 	validateOptions: ProfileValidate.Options?,
 	--[[
 		Handed to StartSessionAsync untouched. ProfileStore's params is
@@ -261,9 +275,16 @@ local function new(deps: Deps): Service
 			will save.
 		]]
 		session.OnSessionEnd:Connect(function()
-			if sessions[userId] == session then
-				forget(userId)
-				report("warn", `profile {userId}: the store ended the session`)
+			if sessions[userId] ~= session then
+				return
+			end
+
+			forget(userId)
+			report("warn", `profile {userId}: the store ended the session`)
+
+			local onSessionLost = deps.onSessionLost
+			if onSessionLost ~= nil then
+				onSessionLost(userId)
 			end
 		end)
 

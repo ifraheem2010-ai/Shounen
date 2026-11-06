@@ -43,7 +43,8 @@ Then in Studio: **Plugins → Rojo → Connect**.
 
 ## The checks
 
-Run them in order. Checks 4 and 6 depend on the ones before them.
+Run them in order. Check 4 depends on check 3. Check 6 is independent of the rest but
+needs the place published and a second device signed in to the same account.
 
 ### 1 — The server comes up
 
@@ -146,27 +147,64 @@ validator nobody will ever debug.
 
 ---
 
-### 6 — A second server cannot steal the session
+### 6 — A second server cannot share the session
 
-**Do:** in Studio, **Test → Clients and Servers**: set **2 players**, then **Start**. Two
-server processes now run against the same DataStore key.
+**Studio's "Clients and Servers" cannot test this.** It starts several *clients* against
+**one** server process, and the extra players get placeholder UserIds — so the keys are
+`Player_-1`, `Player_-2` and so on, which never collide. One server, different keys, no
+contention. An earlier version of this document got that wrong.
 
-**Expect:** exactly one of the two holds the profile. The other logs
+A real test needs **two server processes on one key**, which means two places to be the
+same account in at once.
 
-```
-[DataService] StartSessionAsync refused Player_<id>: … already loaded …
-```
+**Do:**
 
-or a `lock-unavailable` warning, and that client is **kicked** with
-`Could not load your save (lock-unavailable). Please rejoin.`
+1. **Publish the place** if you have changed anything since the last publish
+   (**File → Publish to Roblox**). The live servers run the published build, not your
+   local tree.
+2. **Join the published place on your phone** (or any second device, or a browser) on
+   **your own account**. Wait until you are properly in.
+3. **Back in Studio, press Play.** Same account, same key — Studio's Play runs its own
+   server simulation with your real UserId, so the two genuinely contend.
+4. **Wait up to about 45 seconds.** This is the part that looks broken and is not; see
+   the timing note below.
 
-**Expect specifically NOT:** both servers reporting a loaded profile. Two live sessions on
-one key means two servers writing, and the last save silently wins.
+**Expect:**
 
-**Note:** Studio's multi-client test shares one place but still runs separate server
-simulations, so this is a genuine two-writer test. It is also the one check most likely to
-need a retry — the second server sometimes wins the race and the roles swap. Either way
-round is a pass; **both succeeding is the failure.**
+- **Studio wins.** Its Output eventually shows a normal load, and
+  `DataService.get(...)` returns a profile. The waiting server is the one that takes
+  the session, so the *second* joiner wins and the *first* loses it.
+- **The phone client is kicked**, with:
+  `Your save was opened in another session, so this one can no longer save. Please rejoin.`
+
+**Expect specifically NOT:** both sessions alive at once. Two live sessions on one key
+means two servers writing the same profile, and whichever saves last silently wins.
+
+#### Why the wait
+
+ProfileStore does not refuse the second server. It queues a force-load, waits for the
+holder to let go, and **steals the session after 40 seconds** —
+`SESSION_STEAL = 40` in `vendor/ProfileStore.luau`. So:
+
+| | |
+|---|---|
+| `SESSION_STEAL` | 40s — the waiting server takes over |
+| `START_SESSION_TIMEOUT` | 120s — it gives up entirely |
+| `ASSUME_DEAD` | 630s — a lock with no updates is treated as a crashed server |
+
+`StartSessionAsync` **yields** for that whole period rather than returning nil, so for up
+to 40 seconds the Studio player is in the game with no profile and Output says nothing.
+That is expected. Do not conclude anything before 45 seconds.
+
+#### What this check is really for
+
+`onSessionLost` → kick is the only reason the phone client goes. Without it,
+`SaveSession` drops the profile and logs a warning, and that player keeps playing with
+nothing that will ever save — collecting creatures into a table no longer connected to a
+save. That handler exists because writing this check exposed its absence.
+
+If the phone client stays in the game after Studio loads the profile, the kick path is
+broken even though the session locking worked. Both halves have to pass.
 
 ---
 
@@ -194,6 +232,7 @@ enabled. The three things most likely to be wrong, in order:
 2. **Rojo not connected**, so Studio is running a stale tree. Check 1 catches this.
 3. **Stopped too quickly** before the asynchronous save finished. Affects checks 4 and 5.
 
-A real failure in check 4 or 6 is worth stopping for. Everything in `src/shared/Save/` has
+Check 6 needs 45 seconds before it means anything — ProfileStore steals a contended
+session at 40. A real failure in check 4 or 6 is worth stopping for. Everything in `src/shared/Save/` has
 tests, so a failure there points at the adapter or at the vendored module's behaviour
 having changed — see `vendor/README.md` step 5.

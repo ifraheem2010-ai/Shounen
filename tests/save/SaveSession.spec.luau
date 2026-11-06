@@ -554,6 +554,76 @@ describe("SaveSession / the store ends a session underneath us", function()
 	end)
 end)
 
+describe("SaveSession / losing a session is reported to the caller", function()
+	--[[
+		When another server steals the session, SaveSession drops the profile. That is
+		not enough on its own: whoever owns the player has to be told, because the
+		player is still in the game and nothing they do from that point will ever be
+		saved.
+
+		ProfileStore's waiting server steals after SESSION_STEAL = 40 seconds, so this
+		is not a rare race. It is what happens every time somebody opens the same
+		place twice.
+	]]
+	local function serviceWithLossTracking(store: FakeStore, lost: { number }): SaveSession.Service
+		return SaveSession.new({
+			store = store :: any,
+			now = fixedClock(),
+			onSessionLost = function(userId: number)
+				table.insert(lost, userId)
+			end,
+		})
+	end
+
+	it("calls onSessionLost when the store ends a live session", function()
+		local store = newFakeStore()
+		local lost: { number } = {}
+		local service = serviceWithLossTracking(store, lost)
+		service:load(USER_ID)
+
+		store.sessions[`Player_{USER_ID}`]:fireSessionEnd()
+
+		expect(lost).toEqual({ USER_ID })
+	end)
+
+	it("does not call it when we released the session ourselves", function()
+		-- We ended it on purpose, because the player left. Reporting that as a loss
+		-- would mean kicking a player who has already gone, and warning about a
+		-- cross-server conflict that never happened.
+		local store = newFakeStore()
+		local lost: { number } = {}
+		local service = serviceWithLossTracking(store, lost)
+		service:load(USER_ID)
+		service:release(USER_ID)
+
+		expect(#lost).toBe(0)
+	end)
+
+	it("does not report a loss for a session that has already been replaced", function()
+		local store = newFakeStore()
+		local lost: { number } = {}
+		local service = serviceWithLossTracking(store, lost)
+		service:load(USER_ID)
+		local firstSession = store.sessions[`Player_{USER_ID}`]
+		service:release(USER_ID)
+		service:load(USER_ID)
+
+		firstSession:fireSessionEnd()
+
+		expect(#lost).toBe(0)
+		expect(service:activeCount()).toBe(1)
+	end)
+
+	it("is optional", function()
+		-- Nothing is obliged to care. The service must not assume a handler exists.
+		local store = newFakeStore()
+		local service = newService(store)
+		service:load(USER_ID)
+		store.sessions[`Player_{USER_ID}`]:fireSessionEnd()
+		expect(service:activeCount()).toBe(0)
+	end)
+end)
+
 describe("SaveSession / two players at once", function()
 	it("keeps their profiles apart", function()
 		local store = newFakeStore({

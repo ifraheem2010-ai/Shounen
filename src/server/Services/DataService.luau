@@ -86,10 +86,33 @@ end
 
 local profileStore = ProfileStore.New(STORE_NAME, ProfileSchema.storeTemplate())
 
+--[[
+	Another server took this player's session, so nothing they do here will ever be
+	saved. They have to go.
+
+	ProfileStore's waiting server steals after 40 seconds (SESSION_STEAL in the
+	vendored module), so this is not an exotic race: it fires every time somebody
+	opens the same place a second time. Leaving them in with no profile is the worst
+	outcome available — they keep playing, keep earning, and lose all of it.
+]]
+local function onSessionLost(userId: number)
+	local player = Players:GetPlayerByUserId(userId)
+	if player == nil then
+		-- Already gone. Nothing to do: the session ending is what we wanted.
+		return
+	end
+
+	player:Kick(
+		"Your save was opened in another session, so this one can no longer save. "
+			.. "Please rejoin."
+	)
+end
+
 local service = SaveSession.new({
 	store = adapt(profileStore),
 	now = os.time,
 	log = log,
+	onSessionLost = onSessionLost,
 	-- ProfileStore's params is {Steal: boolean?}. Stealing a live session is never
 	-- right here: it would hand this server a profile another server is still
 	-- writing to, and the later save wins.
