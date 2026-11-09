@@ -36,12 +36,19 @@ Then in Studio: **Plugins → Rojo → Connect**.
 Command Bar runs on the **client**, where `ServerScriptService` does not exist — every
 snippet below will fail with a nil index until you switch.
 
-> With the game running: **Test** tab → the **Current: Client** button → switch it to
-> **Server**.
+Studio exposes this two different ways depending on version. Check the **Explorer panel's
+header** — it reads `Explorer / Client` or `Explorer / Server`, and that is the one place
+that always tells you the truth.
 
-The button is a toggle and shows which context you are in. Switch it back to Client if you
-want to poke at anything client-side. Each snippet below prints its own diagnosis if it
-cannot find the server, so a nil error means you are still on the client.
+> **If there are `Client` and `Server` tabs** above the viewport (current Studio): click
+> the **`Server`** tab.
+>
+> **If there is a `Current: Client` button** on the **Test** tab (older layout): click it
+> to toggle to Server.
+
+Confirmed working when the Explorer header says `Explorer / Server`. Switch back to Client
+if you want to poke at anything client-side. Each snippet below prints its own diagnosis
+rather than throwing, so a nil error means you are still on the client.
 
 **5. Confirm the tree looks right** before pressing play:
 
