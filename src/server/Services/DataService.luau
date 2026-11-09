@@ -120,7 +120,20 @@ local service = SaveSession.new({
 })
 
 local function onPlayerAdded(player: Player)
+	--[[
+		Logged on the way in, not just on the way out.
+
+		A load can yield for a long time -- ProfileStore waits out a session conflict
+		and steals at 40 seconds, and a stale lock from a previous run makes that the
+		normal case rather than the rare one. Without a line here there is no way to
+		tell "still loading" from "never ran", and the two have completely different
+		causes. Found the hard way during the first Studio pass.
+	]]
+	local startedAt = os.clock()
+	log("info", `loading profile for {player.Name} ({player.UserId})`)
+
 	local result = service:load(player.UserId)
+	local elapsed = os.clock() - startedAt
 
 	if not result.ok then
 		local failure = result :: SaveSession.LoadErr
@@ -130,6 +143,15 @@ local function onPlayerAdded(player: Player)
 			outcome: for a held lock it is a retry, and for a corrupt save it is what
 			keeps the save intact instead of overwriting it with a guess.
 		]]
+		log(
+			"warn",
+			string.format(
+				"load FAILED for %s after %.1fs: %s",
+				player.Name,
+				elapsed,
+				failure.reason
+			)
+		)
 		player:Kick(`Could not load your save ({failure.reason}). Please rejoin.`)
 		return
 	end
@@ -140,8 +162,21 @@ local function onPlayerAdded(player: Player)
 		for a player who is already gone, and they wait it out on their next join.
 	]]
 	if player.Parent == nil then
+		log("warn", `{player.Name} left while their profile was loading; releasing it again`)
 		service:release(player.UserId)
+		return
 	end
+
+	local loaded = result :: SaveSession.LoadOk
+	log(
+		"info",
+		string.format(
+			"profile ready for %s in %.1fs (%d repair(s))",
+			player.Name,
+			elapsed,
+			loaded.repaired
+		)
+	)
 end
 
 local function onPlayerRemoving(player: Player)
