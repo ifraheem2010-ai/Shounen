@@ -32,7 +32,18 @@ Then in Studio: **Plugins → Rojo → Connect**.
 **3. Open the Output window.** Everything below is read from it. `DataService` logs with a
 `[DataService]` prefix and the bootstrap logs once with `[Bootstrap]`.
 
-**4. Confirm the tree looks right** before pressing play:
+**4. Know how to reach the server context.** This catches everyone once. During Play, the
+Command Bar runs on the **client**, where `ServerScriptService` does not exist — every
+snippet below will fail with a nil index until you switch.
+
+> With the game running: **Test** tab → the **Current: Client** button → switch it to
+> **Server**.
+
+The button is a toggle and shows which context you are in. Switch it back to Client if you
+want to poke at anything client-side. Each snippet below prints its own diagnosis if it
+cannot find the server, so a nil error means you are still on the client.
+
+**5. Confirm the tree looks right** before pressing play:
 
 - `ServerScriptService.Server.Bootstrap` — a **Script**
 - `ServerScriptService.Server.Services.DataService` — a ModuleScript
@@ -61,89 +72,96 @@ re-check the tree above.
 
 ### 2 — A first-time profile is created, and it is yours
 
-**Do:** with the game still running, open the **Command Bar** and run:
+**Do:** with the game running and the Command Bar in the **Server** context, paste this.
+It is deliberately one line: the Command Bar is a single-line input, and a multi-line
+paste runs only the first line.
 
 ```lua
-local p = require(game.ServerScriptService.Server.Services.DataService).get(game.Players:GetPlayers()[1])
-print(p.ownerUserId, p.schemaVersion, p.money, #p.party, p.nextCreatureSerial)
+local DS = require(game:GetService("ServerScriptService").Server.Services.DataService); local pl = game:GetService("Players"):GetPlayers()[1]; if not pl then warn("CHECK 2 - no player on this server. Are you in the Server context, and is the game running?"); return end; local p = DS.get(pl); if not p then warn("CHECK 2 - no profile for " .. pl.Name .. ". The load may still be running, or it failed - look for a [DataService] line above."); return end; print(string.format("owner=%s  you=%s  schemaVersion=%s  money=%s  party=%s  serial=%s", tostring(p.ownerUserId), tostring(pl.UserId), tostring(p.schemaVersion), tostring(p.money), tostring(#p.party), tostring(p.nextCreatureSerial))); local idOk = p.ownerUserId == pl.UserId and p.ownerUserId ~= 0; local verOk = p.schemaVersion == 1; print(if idOk and verOk then "CHECK 2 PASS" else `CHECK 2 FAIL -{if idOk then "" else " ownerUserId is not yours"}{if verOk then "" else " schemaVersion is not 1"}`); print(if p.money == 0 and #p.party == 0 and p.nextCreatureSerial == 1 then "   fresh profile, as expected on a first run" else "   not a fresh profile - fine if you have run check 3 before")
 ```
 
-**Expect:** your own UserId, then `1 0 0 1`.
+**Expect:**
 
-**Why it matters:** `ownerUserId` must be your id and **never `0`**. Zero is the store
+```
+owner=<your UserId>  you=<your UserId>  schemaVersion=1  money=0  party=0  serial=1
+CHECK 2 PASS
+   fresh profile, as expected on a first run
+```
+
+**Why it matters.** `ownerUserId` must be your own id and **never `0`**. Zero is the store
 template's "never been saved" sentinel; a live profile still carrying it would mint
-creature uids that collide with every other new player's.
+creature uids that collide with every other new player's. The snippet asserts that rather
+than leaving you to eyeball it.
 
----
+The last line is informational, not a failure. `money=0 party=0 serial=1` only holds on a
+genuinely first-time profile, so it will say "not a fresh profile" once you have run
+check 3 — which is correct, not a problem.
+
+**If it warns instead:** "no player on this server" means you are still in the Client
+context, or the game is not running. "no profile" means the load is still going or it
+failed — scroll up for a `[DataService]` line.
 
 ### 3 — A change is held in the live profile
 
-**Do:**
+**Do:** Server context, one line:
 
 ```lua
-local DataService = require(game.ServerScriptService.Server.Services.DataService)
-local p = DataService.get(game.Players:GetPlayers()[1])
-p.money = 4242
-p.flags.studioCheck = true
-print("set:", p.money, p.flags.studioCheck)
+local DS = require(game:GetService("ServerScriptService").Server.Services.DataService); local pl = game:GetService("Players"):GetPlayers()[1]; local p = pl and DS.get(pl); if not p then warn("CHECK 3 - no profile. Are you in the Server context, and is the game running?"); return end; p.money = 4242; p.flags.studioCheck = true; print(string.format("CHECK 3 set  money=%s  flag=%s", tostring(p.money), tostring(p.flags.studioCheck))); print(if p.money == 4242 and p.flags.studioCheck == true then "   held in the live profile - now Stop, wait 5s, and Play again for check 4" else "CHECK 3 FAIL - the write did not stick in memory, which should be impossible")
 ```
 
-**Expect:** `set: 4242 true`.
+**Expect:** `CHECK 3 set  money=4242  flag=true`, then the "held in the live profile" line.
 
 **Why it matters:** `get` returns the same table ProfileStore will save. If it returned a
-copy, this would print correctly and then persist nothing — which is the failure mode that
-looks fine right up until check 4.
+copy this would print correctly and persist nothing — the failure mode that looks fine
+right up until check 4.
 
 ---
 
 ### 4 — It persists across a rejoin
 
-**Do:** **Stop** (Shift+F5). Wait about **five seconds** — `EndSession` is asynchronous, so
-the final write happens after the call returns. Then **Play** again and run:
+**Do:** **Stop** (Shift+F5). **Wait about five seconds** — `EndSession` is asynchronous, so
+the final write happens after the call returns. Then **Play** again, switch back to the
+**Server** context, and run:
 
 ```lua
-local p = require(game.ServerScriptService.Server.Services.DataService).get(game.Players:GetPlayers()[1])
-print(p.money, p.flags.studioCheck, p.lastLoginUnix)
+local DS = require(game:GetService("ServerScriptService").Server.Services.DataService); local pl = game:GetService("Players"):GetPlayers()[1]; local p = pl and DS.get(pl); if not p then warn("CHECK 4 - no profile yet. Give the load a moment and run this again."); return end; print(string.format("money=%s  flag=%s  lastLoginUnix=%s  (now is %s)", tostring(p.money), tostring(p.flags.studioCheck), tostring(p.lastLoginUnix), tostring(os.time()))); print(if p.money == 4242 and p.flags.studioCheck == true then "CHECK 4 PASS - the write survived a full rejoin" else "CHECK 4 FAIL - check 3's write never reached the DataStore. Did you wait ~5s after Stop? Is Studio API access still enabled?")
 ```
 
-**Expect:** `4242 true` and a `lastLoginUnix` that is now, not the one from before.
+**Expect:** `CHECK 4 PASS`, and a `lastLoginUnix` close to the `now` printed beside it
+rather than the earlier one.
 
-**This is the check the whole save system exists for.** If `money` is `0`, the write never
-landed — look for a `[DataService]` warning in the previous session's output, and check
-that API services are still enabled.
+**This is the check the whole save system exists for.** On `CHECK 4 FAIL`, look for a
+`[DataService]` warning in the previous session's Output and confirm API services are
+still enabled.
 
-**If you stopped too fast** and see `0`, that is not necessarily a bug: repeat with a
-longer wait before concluding anything.
+**If you stopped too fast,** a fail is not conclusive. Retry with a longer wait before
+believing it.
 
 ---
 
 ### 5 — A repair is applied and reported
 
-**Do:** corrupt the live profile deliberately, then force a reload:
+**Do:** first corrupt the live profile and release it:
 
 ```lua
-local DataService = require(game.ServerScriptService.Server.Services.DataService)
-local player = game.Players:GetPlayers()[1]
-local p = DataService.get(player)
-p.money = -500
-p.playtimeSeconds = -1
-DataService.service:release(player.UserId)
+local DS = require(game:GetService("ServerScriptService").Server.Services.DataService); local pl = game:GetService("Players"):GetPlayers()[1]; local p = pl and DS.get(pl); if not p then warn("CHECK 5a - no profile. Server context?"); return end; p.money = -500; p.playtimeSeconds = -1; DS.service:release(pl.UserId); print("CHECK 5a - corrupted money and playtime, then released the session. Wait ~5s, then run 5b.")
 ```
 
-Wait about five seconds, then:
+**Wait about five seconds** for the release to finish, then:
 
 ```lua
-local DataService = require(game.ServerScriptService.Server.Services.DataService)
-local player = game.Players:GetPlayers()[1]
-print(DataService.service:load(player.UserId).repaired)
-print(DataService.get(player).money)
+local DS = require(game:GetService("ServerScriptService").Server.Services.DataService); local pl = game:GetService("Players"):GetPlayers()[1]; if not pl then warn("CHECK 5b - no player on this server."); return end; local r = DS.service:load(pl.UserId); if not r.ok then warn("CHECK 5b - the load was refused: " .. tostring(r.reason) .. " - " .. tostring(r.detail) .. " (if this says lock-unavailable, 5a's release has not finished; wait and retry)"); return end; local p = DS.get(pl); print(string.format("repaired=%s  money=%s  playtimeSeconds=%s", tostring(r.repaired), tostring(p.money), tostring(p.playtimeSeconds))); print(if r.repaired == 2 and p.money == 0 and p.playtimeSeconds == 0 then "CHECK 5 PASS - both repairs applied, and both reported" else "CHECK 5 FAIL - expected 2 repairs clamping money and playtimeSeconds to 0")
 ```
 
-**Expect:** `2`, then `0`. And in Output, two `[DataService] profile <id>: repaired …`
-lines naming `money` and `playtimeSeconds`.
+**Expect:** `repaired=2  money=0  playtimeSeconds=0` and `CHECK 5 PASS`, plus two
+`[DataService] profile <id>: repaired …` lines in Output naming `money` and
+`playtimeSeconds`.
 
-**Why it matters:** repairs must be visible. A validator that silently clamps is a
-validator nobody will ever debug.
+**If 5b says `lock-unavailable`,** 5a's release had not finished. Wait and run 5b again —
+that is the asynchronous `EndSession` again, not a failure.
+
+**Why it matters:** repairs must be visible. A validator that silently clamps is one
+nobody will ever debug.
 
 ---
 
@@ -213,13 +231,10 @@ broken even though the session locking worked. Both halves have to pass.
 Check 3 wrote `money = 4242` and a `studioCheck` flag into your real profile. To clear it:
 
 ```lua
-local DataService = require(game.ServerScriptService.Server.Services.DataService)
-local p = DataService.get(game.Players:GetPlayers()[1])
-p.money = 0
-p.flags.studioCheck = nil
+local DS = require(game:GetService("ServerScriptService").Server.Services.DataService); local pl = game:GetService("Players"):GetPlayers()[1]; local p = pl and DS.get(pl); if not p then warn("cleanup - no profile."); return end; p.money = 0; p.flags.studioCheck = nil; print("cleanup - money reset to 0 and studioCheck cleared. Stop, wait 5s, rejoin to confirm it saved.")
 ```
 
-Then stop, wait five seconds, and rejoin to confirm it saved as `0`.
+Then Stop, wait five seconds, and rejoin to confirm it saved as `0`.
 
 ---
 

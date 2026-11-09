@@ -9,7 +9,7 @@ already written down elsewhere.
 
 ## Where things stand
 
-**665 tests green, 0 failed. 0 type diagnostics in `src`. Format clean.**
+**669 tests green, 0 failed. 0 type diagnostics in `src`. Format clean.**
 
 ```bash
 cd C:\Websites\shounen
@@ -52,7 +52,8 @@ to `SaveSession` and `Bootstrap.server.luau` starts it.
 **Before trusting it in a real place, run `docs/STUDIO_CHECKS.md`.** `DataService` is the
 only file in the save path no test covers — by design, since `src/server/` cannot be
 required under Lune — so a manual pass in Studio is the only thing that exercises it.
-Six checks, about ten minutes, and it needs API services enabled.
+Six checks. Five take about ten minutes and need API services enabled; check 6 needs the
+place published and a second device signed in to the same account, and a 45-second wait.
 
 **If you update the vendored module,** follow `vendor/README.md` and do not skip step 5.
 The adapter depends on three specific upstream behaviours, all recorded in its header:
@@ -119,7 +120,7 @@ with rather than rediscovered.
 
 - Never edit a passing test to make new code pass. Every mutation survivor so far has
   been a test that was weaker than it looked, and every fix was a stronger test.
-- Mutation-test new guards. The save system ran 42 of them across three modules and found
+- Mutation-test new guards. The save system ran 44 of them across three modules and found
   four real weaknesses, including a test that passed because `tonumber` happened to reject
   a string, and a fake that was gentler than the library it stood in for.
 
