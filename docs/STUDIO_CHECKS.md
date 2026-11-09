@@ -59,6 +59,27 @@ rather than throwing, so a nil error means you are still on the client.
 
 ---
 
+## Before you start: always pause between Stop and Play
+
+**After stopping a session, wait about 15 seconds before pressing Play again.**
+
+A session lock is released asynchronously, so a quick Stop→Play has the new server
+fighting the old server's lock. ProfileStore does not fail in that situation — it waits
+and steals at 40 seconds — so the symptom is not an error, it is a join that silently
+takes the better part of a minute while Output says nothing useful.
+
+The first time these checks were run, three rapid Play/Stop cycles stacked up exactly
+this way and it looked like the profile was never loading at all. It was loading; it was
+queued behind a lock. `DataService` now logs `loading profile for …` on the way in and
+`profile ready for … in Xs` on the way out, so the two are distinguishable — but the
+pause is what avoids the wait in the first place.
+
+**Never run a manual `service:load()` to "check whether it worked".** If a load is
+already in flight for that key, ProfileStore hands the session to the new call, the
+original one loses it, and `onSessionLost` kicks you. Read the log lines instead.
+
+---
+
 ## The checks
 
 Run them in order. Check 4 depends on check 3. Check 6 is independent of the rest but
